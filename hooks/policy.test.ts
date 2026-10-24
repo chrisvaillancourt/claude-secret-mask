@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { CANARIES } from './canaries'
 import { builtinRules } from './detect'
-import { INITIAL, configFrom, expandHome, isActive, parseArgs, restoreFieldsFor, selfTest, statusText, withheld } from './policy'
+import { INITIAL, configFrom, expandHome, isActive, isToolResultsFile, parseArgs, restoreFieldsFor, selfTest, statusText, withheld } from './policy'
 
 describe('policy', () => {
   test('parseArgs reads on, off, status, test and rejects the rest', async () => {
@@ -42,6 +42,13 @@ describe('policy', () => {
     expect(restoreFieldsFor('mcp__srv__call', off)).toEqual([])
     expect(restoreFieldsFor('mcp__srv__call', on)).toBe('all')
     for (const t of ['Agent', 'SendMessage', 'Read', 'WebFetch', 'TaskCreate']) expect(restoreFieldsFor(t, on)).toEqual([])
+  })
+
+  test('isToolResultsFile accepts only a session tool-results file', async () => {
+    expect(isToolResultsFile('/h/.claude/projects/-x/abc-123/tool-results/b1.txt')).toBe(true)
+    expect(isToolResultsFile('/etc/passwd')).toBe(false)
+    expect(isToolResultsFile('/h/.claude/projects/-x/abc/tool-results/../../../x')).toBe(false)
+    expect(isToolResultsFile('/h/project/tool-results/b1.txt')).toBe(false)
   })
 
   test('expandHome expands a leading ~ only', async () => {

@@ -54,6 +54,11 @@ export function unknownReason(tokens: readonly string[]): string {
   )
 }
 
+/** A file core saved a large tool output to: `<config>/projects/<dir>/<session>/tool-results/<file>`. */
+export function isToolResultsFile(path: string): boolean {
+  return !path.split('/').includes('..') && /\/projects\/[^/]+\/[^/]+\/tool-results\/[^/]+$/.test(path)
+}
+
 export function expandHome(path: string, home: string | undefined): string | undefined {
   if (path === '~' || path.startsWith('~/')) return home === undefined ? undefined : home + path.slice(1)
   return path

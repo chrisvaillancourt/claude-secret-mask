@@ -8,7 +8,15 @@ const KEY = 'AKIAFAKEFAKEFAKE0000'
 const PH = /__SECRET_AWS_KEY_ID_[0-9A-F]{8}__/
 
 /** The engine beneath the plugin. `ran` records each tool input that reached core. */
+const PERSISTED = '/home/t/.claude/projects/-x/0f0f0f0f-0000-4000-8000-000000000000/tool-results/b1.txt'
+
 const world = (on: On, files: Record<string, string> = {}) => {
+  const written: Record<string, string> = {}
+  on('fs.write', ($, e) => {
+    written[e.path] = e.text
+    files[e.path] = e.text
+    return { value: undefined }
+  })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('fs.read', ($, e) => {
@@ -19,19 +27,25 @@ const world = (on: On, files: Record<string, string> = {}) => {
   const session = mock.session(on)
   const ran: Record<string, unknown>[] = []
   let errorNext = false
+  let persistNext = false
   on('tool.call', ($, e) => {
     ran.push({ ...e })
     const echoed = typeof (e as any).command === 'string' ? `ran: ${(e as any).command}` : 'ok'
     if (errorNext) {
       errorNext = false
-      return { result: echoed, text: echoed, isError: true as const, ref: 2 }
+      return { result: `Error: ${echoed}`, text: echoed, isError: true as const, ref: 2 }
+    }
+    if (persistNext) {
+      persistNext = false
+      files[PERSISTED] = `lots of output\n${echoed}\n`
+      return { result: { stdout: 'lots of output', stderr: '', interrupted: false, persistedOutputPath: PERSISTED }, text: 'lots', ref: 3 }
     }
     return { result: { stdout: echoed, stderr: '', interrupted: false }, text: echoed, ref: 1 }
   })
   on('session.send', ($, e) => ({ isDelivered: true as const, text: e.text }) as any)
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('prompt.context', ($, e) => ({ blocks: e.blocks }))
-  return { session, ran, errorNext: () => (errorNext = true) }
+  return { session, ran, written, errorNext: () => (errorNext = true), persistNext: () => (persistNext = true) }
 }
 
 const start = ($: any) => $.session.start({ cwd: '/x', surface: 'terminal', isInteractive: true })
@@ -153,6 +167,25 @@ describe('restoring tool input', () => {
     expect(JSON.stringify(r).includes(KEY)).toBe(false)
     expect(r.result.stdout).toBe(`ran: echo ${ph}`)
     expect(r.ref).toBeUndefined()
+  })
+
+  test('an errored result that echoes a secret is withheld with its masked text', async ($, on) => {
+    const w = world(on)
+    await start($)
+    w.errorNext()
+    const r: any = await $.tool.call({ tool: 'Bash', command: `cat creds; echo ${KEY}; exit 3` })
+    expect(JSON.stringify(r).includes(KEY)).toBe(false)
+    expect(r.deny ?? r.text).toMatch(PH)
+  })
+
+  test('a large output saved to a tool-results file is masked in that file', async ($, on) => {
+    const w = world(on)
+    await start($)
+    w.persistNext()
+    await $.tool.call({ tool: 'Bash', command: `echo ${KEY}` })
+    expect(w.written[PERSISTED]).toBeDefined()
+    expect(w.written[PERSISTED]!.includes(KEY)).toBe(false)
+    expect(w.written[PERSISTED]).toMatch(PH)
   })
 
   test('a result with nothing to mask is passed through as core made it', async ($, on) => {

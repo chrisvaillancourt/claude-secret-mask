@@ -10,7 +10,8 @@ This is masking on the paths the mod API lets a plugin rewrite, not a vault or a
 - **Masks** in the main conversation and in subagents:
   - every row the conversation keeps (`session.append`, all doors: your prompt, tool results, deliveries from other agents and sessions, hook context, attachments, compaction summaries, the model's own text). This is what the model reads and what the transcript file stores.
   - the prompt as you submit it (`prompt.submit`), so the queued record matches.
-  - the tool's structured result (`tool.call`), which the screen draws and the transcript stores beside the model's copy.
+  - the tool's structured result (`tool.call`), which the screen draws and the transcript stores beside the model's copy. A failed tool's result that holds a secret is withheld and replaced by its masked text, so the stored error record is masked too.
+  - the file Claude Code saves a large Bash output to (`tool-results/` in the session folder): the mod masks that file in place after the tool runs.
   - messages sent to other agents or sessions (`session.send`).
   - the first message's context blocks (`prompt.context`: CLAUDE.md and the like), only when a secret is found there.
 - **Placeholders** are stable per secret for as long as the mod stays loaded, are made of ASCII word characters (inert if they ever reach a shell unrestored), and carry the kind of secret so the model knows what it holds.
@@ -38,7 +39,8 @@ These routes reach the model, the screen or the disk without passing through any
 - **Images, PDFs and other media** are not scanned.
 - **The system prompt and tool descriptions** are not scanned.
 - **History loaded by `--resume`, teleport or a saved subagent transcript** is not re-scanned.
-- **A failed tool's error record.** When a tool reports an error, the model's copy is masked at `session.append`, but the error record stored beside it is kept as made.
+- **Large outputs of tools other than Bash.** Claude Code saves an output too large to keep inline to a file before any hook runs. The mod masks the file a Bash (or MCP raw output) result names; another tool's saved file is left as written.
+- **Managed plugins seated above it.** An organization's plugin in the `prepend` tier runs before every user plugin and can pass an event on past them. On the machine this was checked on, the organization's built-in plugin did that for `prompt.context` (every session) and for one row appended at startup, so neither reached this mod. The debug log names each case: `secret-mask: ... bypassed by <plugin>`, and Claude Code shows `its <event> hook was skipped`.
 - **Slash-command arguments** reach the command unmasked (its rows in the conversation are masked). The prompt-history line (up-arrow) is not verified.
 - **Secrets split by line wraps or across blocks**, values shorter than the thresholds, unusual encodings, and formats the patterns don't know.
 - **Other plugins** can see and reintroduce secrets, and nothing protects you when the mod is off, fails to load, or is skipped.
@@ -82,7 +84,15 @@ The file is read at session start and on reload.
 
 ## Live checks
 
-Checked on Claude Code 2.1.310 with `claude -p --plugin-dir`; see `AGENTS.md` for the method. Findings are recorded in the commit that adds them.
+Checked on Claude Code 2.1.310 with `claude -p --plugin-dir . --model haiku` and one interactive session driven through a pty, using the fake key `AKIAFAKEFAKEFAKE0000` in a file:
+
+- **What the model saw:** `cat creds.txt` came back as `aws_access_key_id = __SECRET_AWS_KEY_ID_4C05790D__`, and the model repeated the placeholder.
+- **What ran:** the model ran `printf '%s\n' __SECRET_AWS_KEY_ID_4C05790D__ > ran.txt`; `ran.txt` held `AKIAFAKEFAKEFAKE0000`. Its `cat ran.txt` came back masked again.
+- **What the transcript stored:** no copy of the key anywhere in the transcript file: tool_use inputs hold the placeholder (the model's own words), tool_result rows and the `toolUseResult` records hold the masked output, the prompt row and queue records hold the masked prompt. The same held for the `stream-json` output and the debug log.
+- **What the screen showed:** the Bash row drew `aws_access_key_id=__SECRET_AWS_KEY_ID_4C99A82F__`; the raw key appeared nowhere in the bytes the terminal received.
+- **Errors and large outputs:** before the fix, a failing command's error record and a large output's saved file kept the raw key; both are masked now (re-checked live).
+- **Unknown placeholder:** `echo __SECRET_AWS_KEY_ID_DEADBEEF__` was denied with the reason above and did not run.
+- `/secret-mask status` and `/secret-mask test` ran in the interactive session; the self-test passed.
 
 ## Install
 

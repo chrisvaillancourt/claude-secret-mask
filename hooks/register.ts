@@ -9,6 +9,7 @@ import {
   configFrom,
   expandHome,
   isActive,
+  isToolResultsFile,
   parseArgs,
   patternsLine,
   restoreFieldsFor,
@@ -103,6 +104,28 @@ async function loadPatterns($: EngineInterface) {
   if (parsed.errors.length > 0) log($, patternsLine(status))
 }
 
+/**
+ * Output too large to keep inline is saved by core to a tool-results file
+ * before any hook sees it; the result names it. Mask that file in place.
+ */
+async function maskPersisted($: EngineInterface, result: unknown) {
+  if (typeof result !== 'object' || result === null) return
+  const r = result as Record<string, unknown>
+  for (const key of ['persistedOutputPath', 'rawOutputPath']) {
+    const path = r[key]
+    if (typeof path !== 'string' || !isToolResultsFile(path)) continue
+    try {
+      const text = await $.fs.read(path)
+      const out = maskText(text, ctx.vault, ctx.rules, mint)
+      if (out.count === 0) continue
+      tally(out)
+      await $.fs.write(path, out.text)
+    } catch (err) {
+      log($, `could not mask a saved tool output (${err instanceof Error ? err.name : 'error'}); it may hold secrets`)
+    }
+  }
+}
+
 function maskString(text: string): string {
   const out = maskText(text, ctx.vault, ctx.rules, mint)
   tally(out)
@@ -172,8 +195,19 @@ export const register: Register = (on, options) => {
     }
     const res = await next(input)
     // A result we put a secret into is masked even while masking is off.
-    if (res.deny !== undefined || res.isError === true) return res
+    if (res.deny !== undefined) return res
     if (restored === 0 && !(await active($))) return res
+    if (res.isError === true) {
+      // An error's record is stored as made, so withhold it: the model reads
+      // the masked text as the refusal and the record holds no secret.
+      const text = typeof res.text === 'string' ? res.text : typeof res.result === 'string' ? res.result : ''
+      const raw = typeof res.result === 'string' ? res.result : ''
+      const masked = maskText(text, ctx.vault, ctx.rules, mint)
+      const inRecord = raw === text ? masked : maskText(raw, ctx.vault, ctx.rules, mint)
+      tally(masked)
+      return masked.count + inRecord.count === 0 ? res : { deny: masked.text }
+    }
+    await maskPersisted($, res.result)
     const m = maskDeep(res.result, ctx.vault, ctx.rules, mint)
     tally(m)
     if (m.count === 0) return res
