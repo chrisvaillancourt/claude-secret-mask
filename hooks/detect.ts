@@ -26,8 +26,8 @@ export type Span = { start: number; end: number; value: string; kind: string }
 
 export type ParsedPatterns = { patterns: Rule[]; allow: string[]; allowPatterns: RegExp[]; errors: string[] }
 
-/** An assignment's name: `NAME=`, `name:`, `"name":`, `--name=`. */
-const ASSIGNED_NAME = '(?<![A-Za-z0-9_.])([A-Za-z][A-Za-z0-9_.-]*)'
+/** An assignment's name: `NAME=`, `name:`, `"name":`, `--name=`, `_PASSWORD=`. Leading underscores are part of it. */
+const ASSIGNED_NAME = '(?<![A-Za-z0-9_.])(_*[A-Za-z][A-Za-z0-9_.-]*)'
 
 /** Final name segments that make an assignment secret. */
 const SECRET_WORDS = new Set(['password', 'passwd', 'pwd', 'secret', 'token', 'key', 'apikey', 'credential', 'credentials', 'auth', 'passphrase'])

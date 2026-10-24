@@ -154,6 +154,14 @@ describe('masking', () => {
     expect(list.text).toBe('{"tokens":[{"api_token":__SECRET_SECRET_VALUE_00000001__]}')
   })
 
+  test('a name with a leading underscore is checked like any other', async () => {
+    const v = 'FAKEunderscore0000'
+    expect(findSecrets(`_PASSWORD=${v}`, rules).map(s => s.value)).toEqual([v])
+    expect(findSecrets(`{"_authToken": "${v}"}`, rules).map(s => s.value)).toEqual([v])
+    expect(findSecrets(`__DB_SECRET=${v}`, rules).map(s => s.value)).toEqual([v])
+    expect(findSecrets('{"_token_count":12345678,"_password_hint":"ask the administrator"}', rules)).toEqual([])
+  })
+
   test('a dotenv password holding a brace is still taken whole', async () => {
     const pass = 'FAKE}pass{0000}'
     const out = maskText(`DB_PASSWORD=${pass}\nechoed=${pass}`, newVault(), rules, counter())
