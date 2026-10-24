@@ -144,6 +144,22 @@ describe('masking', () => {
     expect(JSON.stringify(blocks.content).includes(X)).toBe(false)
   })
 
+  test('a numeric JSON value is learned without the closing brace, and its bare copies are masked', async () => {
+    const pin = '12340000'
+    const one = maskText(`{"password":${pin}}\nechoed=${pin}`, newVault(), rules, counter())
+    expect(one.text).toBe('{"password":__SECRET_SECRET_VALUE_00000001__}\nechoed=__SECRET_SECRET_VALUE_00000001__')
+    const deep = maskDeep({ stdout: `{"db":{"password": ${pin}}}`, stderr: `echoed=${pin}` }, newVault(), rules, counter())
+    expect(deep.value).toEqual({ stdout: '{"db":{"password": __SECRET_SECRET_VALUE_00000001__}}', stderr: 'echoed=__SECRET_SECRET_VALUE_00000001__' })
+    const list = maskText(`{"tokens":[{"api_token":${pin}]}`, newVault(), rules, counter())
+    expect(list.text).toBe('{"tokens":[{"api_token":__SECRET_SECRET_VALUE_00000001__]}')
+  })
+
+  test('a dotenv password holding a brace is still taken whole', async () => {
+    const pass = 'FAKE}pass{0000}'
+    const out = maskText(`DB_PASSWORD=${pass}\nechoed=${pass}`, newVault(), rules, counter())
+    expect(out.text).toBe('DB_PASSWORD=__SECRET_SECRET_VALUE_00000001__\nechoed=__SECRET_SECRET_VALUE_00000001__')
+  })
+
   test('a PEM key split across lines is masked as one secret', async () => {
     const pem = CANARIES.find(c => c.kind === 'PRIVATE_KEY')!
     const out = maskText(pem.line, newVault(), rules, counter())

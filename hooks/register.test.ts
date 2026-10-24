@@ -323,6 +323,15 @@ describe('restoring tool input', () => {
     expect(JSON.stringify(r.result).includes(X)).toBe(false)
   })
 
+  test('a numeric JSON secret is masked in the structured result, braces kept', async ($, on) => {
+    world(on)
+    await start($)
+    const r: any = await $.tool.call({ tool: 'Bash', command: `printf '{"password":12340000}\\nechoed=12340000'` })
+    const out = JSON.stringify(r.result)
+    expect(out.includes('12340000')).toBe(false)
+    expect(r.result.stdout).toMatch(/\{"password":__SECRET_SECRET_VALUE_[0-9A-F]{8}__\}/)
+  })
+
   test('a saved output outside this session\'s tool-results folder is never rewritten', async ($, on) => {
     const w = world(on)
     await start($)

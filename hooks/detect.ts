@@ -56,6 +56,12 @@ export function isSecretName(name: string): boolean {
 /** The minimum length of an assigned value before it counts as a secret. */
 export const MIN_ASSIGNED_LENGTH = 8
 
+/**
+ * A JSON number as the value of a quoted key (`"name":`), at least the
+ * minimum length, captured without the `,` `}` or `]` that ends it.
+ */
+const JSON_NUMBER = `(?<="\\s*:\\s*)(?=[-+.0-9eE]{${MIN_ASSIGNED_LENGTH}})(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)(?=\\s*(?:[,}\\]]|$))`
+
 // Order matters only for ties: on the same span, the earlier rule's kind wins,
 // so a known format beats the generic assignment rule.
 const BUILTIN: readonly Rule[] = [
@@ -81,13 +87,16 @@ const BUILTIN: readonly Rule[] = [
   {
     // NAME=value, NAME: value, "name": "value", where the name passes
     // isSecretName. A quoted value is taken whole (spaces and commas
-    // included); an unquoted one runs to whitespace or , ;
+    // included). After a JSON key (`"name":`) a number followed by JSON
+    // punctuation (`, } ]`) or the end is a JSON scalar, taken without the
+    // punctuation. Any other unquoted value runs to whitespace or , ; & \
+    // (a `}` stays in a dotenv value).
     kind: 'SECRET_VALUE',
     re: new RegExp(
-      `${ASSIGNED_NAME}["']?\\s*[:=]\\s*(?:"((?:[^"\\\\\\n]|\\\\.){${MIN_ASSIGNED_LENGTH},})"|'([^'\\n]{${MIN_ASSIGNED_LENGTH},})'|([^\\s"'\`,;&\\\\]{${MIN_ASSIGNED_LENGTH},}))`,
+      `${ASSIGNED_NAME}["']?\\s*[:=]\\s*(?:"((?:[^"\\\\\\n]|\\\\.){${MIN_ASSIGNED_LENGTH},})"|'([^'\\n]{${MIN_ASSIGNED_LENGTH},})'|${JSON_NUMBER}|([^\\s"'\`,;&\\\\]{${MIN_ASSIGNED_LENGTH},}))`,
       'g',
     ),
-    group: [2, 3, 4],
+    group: [2, 3, 4, 5],
     accept: (m, value) => isSecretName(m[1] ?? '') && !looksLikeReference(value),
   },
 ]
