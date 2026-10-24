@@ -300,6 +300,23 @@ describe('restoring', () => {
     expect(ms < 1500).toBe(true)
   })
 
+  test('ten thousand known values over a 4 MB output are found in one pass (R5-4)', async () => {
+    const keys = Array.from({ length: MAX_SECRETS }, (_, i) => `AKIAFAKE${String(i).padStart(12, '0')}`)
+    const text = `${Array.from({ length: 19 }, () => keys.join('\n')).join('\n')}\n`
+    const known = withKnownValues(rules, keys.map(value => ({ value, kind: 'FAKE_KNOWN' })))
+    const t0 = performance.now()
+    const out = maskText(text, newVault(), known, counter())
+    const ms = performance.now() - t0
+    expect(out.count).toBe(190000)
+    expect(out.text.includes(keys[0]!) || out.text.includes(keys.at(-1)!)).toBe(false)
+    expect(ms < 1500).toBe(true)
+  })
+
+  test('a known value inside a longer known value is still found where it stands alone', async () => {
+    const known = withKnownValues(rules, [{ value: 'FAKEinner0000', kind: 'INNER' }, { value: 'xFAKEinner0000x', kind: 'OUTER' }])
+    expect(findSecrets('xFAKEinner0000x and FAKEinner0000', known).map(s => [s.kind, s.value])).toEqual([['OUTER', 'xFAKEinner0000x'], ['INNER', 'FAKEinner0000']])
+  })
+
   test('the vault refuses to grow past its bound', async () => {
     const keys = Array.from({ length: MAX_SECRETS + 1 }, (_, i) => `AKIAFAKE${String(i).padStart(12, '0')}`).join(' ')
     expect(() => maskText(keys, newVault(), rules, counter())).toThrow()

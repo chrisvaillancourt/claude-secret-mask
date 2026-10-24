@@ -1,6 +1,6 @@
 // Pure masking and restoring over a Vault: no `$`, no I/O. The vault is the
 // only place a secret's value is kept; register.ts holds it in module memory.
-import { KIND_SOURCE, candidates } from './detect'
+import { KIND_SOURCE, candidates, escapeRegExp } from './detect'
 import type { Rules } from './detect'
 
 /** A placeholder this mod issues: `__SECRET_<KIND>_<8 uppercase hex>__`, KIND as `isKind` defines it. */
@@ -80,7 +80,7 @@ function knownPattern(vault: Vault): RegExp | null {
   const cached = known.get(vault)
   if (cached !== undefined && cached.size === vault.byValue.size) return cached.re
   const values = [...vault.byValue.keys()].sort((a, b) => b.length - a.length)
-  const re = values.length === 0 ? null : new RegExp(values.map(v => v.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&')).join('|'), 'g')
+  const re = values.length === 0 ? null : new RegExp(values.map(escapeRegExp).join('|'), 'g')
   known.set(vault, { size: vault.byValue.size, re })
   return re
 }

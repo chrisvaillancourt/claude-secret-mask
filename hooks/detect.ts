@@ -611,6 +611,30 @@ function withIndices(re: RegExp): RegExp {
   return d
 }
 
+/** Escapes a literal for a regex. */
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&')
+}
+
+const knownValues = new WeakMap<readonly KnownValue[], { re: RegExp; kinds: Map<string, string> } | null>()
+
+/**
+ * One regex matching any known value, longest first, so one left-to-right
+ * pass finds the earliest and then longest occurrence whatever the number of
+ * values (R5-4: a scan per value took 10 s for 10,000 values over 4 MB).
+ * Built once per rule set. The first kind given for a value wins.
+ */
+function knownValuePattern(values: readonly KnownValue[]): { re: RegExp; kinds: Map<string, string> } | null {
+  let cached = knownValues.get(values)
+  if (cached !== undefined) return cached
+  const kinds = new Map<string, string>()
+  for (const { value, kind } of values) if (!kinds.has(value)) kinds.set(value, kind)
+  const sorted = [...kinds.keys()].sort((a, b) => b.length - a.length)
+  cached = sorted.length === 0 ? null : { re: new RegExp(sorted.map(escapeRegExp).join('|'), 'g'), kinds }
+  knownValues.set(values, cached)
+  return cached
+}
+
 /** The kind of every value the assignment parsers find. */
 export const ASSIGNMENT_KIND = 'SECRET_VALUE'
 
@@ -624,8 +648,9 @@ export function candidates(text: string, rules: Rules): (Span & { rank: number }
   const add = (start: number, end: number, value: string, kind: string, rank: number) => {
     if (value !== '' && !isAllowed(value, rules)) found.push({ start, end, value, kind, rank })
   }
-  for (const { value, kind } of rules.values) {
-    for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + 1)) add(at, at + value.length, value, kind, 0)
+  const known = knownValuePattern(rules.values)
+  if (known !== null) {
+    for (const m of text.matchAll(known.re)) add(m.index, m.index + m[0].length, m[0], known.kinds.get(m[0])!, 0)
   }
   rules.patterns.forEach((rule, i) => {
     const re = new RegExp(withIndices(rule.re))
