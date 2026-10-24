@@ -70,6 +70,9 @@ export const CORPUS: readonly Row[] = [
   { format: 'yaml', name: 'HTTP header at line start', input: 'X-Api-Key: FAKEheader0000key', mask: ['FAKEheader0000key'] },
   { format: 'yaml', name: 'JSON-style line, quoted value', input: '"api_token": "FAKEfake0000example",', mask: ['FAKEfake0000example'] },
   { format: 'yaml', name: 'JSON-style fragment, number before a comma', input: '  "pin_token": 12340000,\n  "other": 1', mask: ['12340000'] },
+  { format: 'yaml', name: 'R4 matrix: JSON-style fragment, no space after a quoted key', input: '"pin_token":12345678\necho 12345678', mask: ['12345678'] },
+  { format: 'yaml', name: 'R4 matrix: JSON-style fragment, number before closing brackets', input: '"PASSWORD":12345678]}\necho 12345678', mask: ['12345678'] },
+  { format: 'yaml', name: 'R4 matrix: JSON-style fragment, a negative exponent', input: '  "api_token":-1.23e+45,', mask: ['-1.23e+45'] },
   { format: 'yaml', name: 'negative: templates, references, placeholders', input: 'password: "{{ .Values.dbPassword }}"\napi_key: <your-api-key-here>\ntoken: $GITHUB_TOKEN\npassword: ${{ secrets.DB_PASSWORD }}', mask: [] },
   { format: 'yaml', name: 'negative: tags, aliases, block scalars, flow collections', input: 'password: !Ref DbPassword00\ntoken: *default_token\nsecret: |\nkey: {a: b}', mask: [] },
   { format: 'yaml', name: 'negative: ordinary values', input: 'token_type: "bearer"\nmax_tokens: 128000000\ntoken_kind: identifier', mask: [] },
@@ -121,6 +124,7 @@ export const CORPUS: readonly Row[] = [
   // Out of contract (README): pinned so a change is a decision, not an accident.
   { format: 'out-of-contract', name: 'an assignment in the middle of a line', input: 'connecting with password=FAKEmidline0000 now', mask: [] },
   { format: 'out-of-contract', name: 'a URL query string', input: 'GET /api?user=app&api_key=FAKEquery0000key HTTP/1.1', mask: [] },
+  { format: 'out-of-contract', name: 'R4 matrix: no space after an unquoted YAML key', input: 'PASSWORD:12345678}', mask: [] },
   { format: 'out-of-contract', name: 'invalid JSON gets no JSON handling', input: '{"tokens":[{"api_token":12340000]}', mask: [] },
 ]
 

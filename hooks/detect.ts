@@ -146,8 +146,13 @@ const KEY_EQUALS = new RegExp(
   'gmd',
 )
 
-/** YAML: `name: value`, `"name": value`, `- name: value`. Groups 1-3 the name (double-, single- or unquoted), 4 the rest. */
-const YAML_KEY = new RegExp(`${LEAD}(?:"([^"\\n]*)"|'([^'\\n]*)'|(${NAME}))[ \\t]*:(?:[ \\t]+([^\\n]*))?$`, 'gmd')
+/**
+ * YAML: `name: value`, `"name": value`, `- name: value`. Groups 1-3 the name
+ * (double-, single- or unquoted), 4 the space after the colon, 5 the rest. A
+ * quoted key needs no space after its colon (`"name":value`, as YAML 1.2
+ * allows for JSON-like keys); an unquoted one does.
+ */
+const YAML_KEY = new RegExp(`${LEAD}(?:"([^"\\n]*)"|'([^'\\n]*)'|(${NAME}))[ \\t]*:([ \\t]*)([^\\n]*)$`, 'gmd')
 
 /** `--name=value` or `--name value`, anywhere. Group 1 the name, 2 the separator, 3-5 the value. */
 const CLI_FLAG = /(?<![A-Za-z0-9_-])--(?!no-)([A-Za-z0-9][A-Za-z0-9_.-]*)(=|[ \t]+)(?:"([^"\n]*)"|'([^'\n]*)'|([^\s;&|<>()'"`]+))/dg
@@ -207,8 +212,9 @@ function yamlValues(rest: string, at: number, isKeyQuoted: boolean, out: Found[]
   if (q === undefined || '|>!*{[@`'.includes(q)) return
   const comment = /\s#/.exec(rest)
   let value = rest.slice(0, comment?.index ?? rest.length).trimEnd()
-  // A JSON-style line in text that isn't JSON as a whole: drop the separator.
-  if (isKeyQuoted && value.endsWith(',')) value = value.slice(0, -1)
+  // A JSON-style line in text that isn't JSON as a whole: drop the
+  // separator and closing brackets that follow a scalar.
+  if (isKeyQuoted) value = value.replace(/[,\]}]+$/, '')
   if (isCodeExpression(value)) return
   out.push({ start: at, end: at + value.length, value })
 }
@@ -233,8 +239,9 @@ function keyEqualsFinds(text: string, out: Found[]) {
 function yamlFinds(text: string, out: Found[]) {
   for (const m of text.matchAll(YAML_KEY)) {
     const name = m[1] ?? m[2] ?? m[3]!
-    if (m[4] === undefined || !isSecretName(name)) continue
-    yamlValues(m[4], m.indices![4]![0], m[3] === undefined, out)
+    const isKeyQuoted = m[3] === undefined
+    if (m[5] === '' || (!isKeyQuoted && m[4] === '') || !isSecretName(name)) continue
+    yamlValues(m[5]!, m.indices![5]![0], isKeyQuoted, out)
   }
 }
 
