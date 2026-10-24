@@ -174,9 +174,11 @@ async function mentionVerdict($: EngineInterface, path: string): Promise<'secret
 
 /** Best effort: tell the person on screen and in the log. Never pass a value here. */
 function note($: EngineInterface, text: string) {
-  log($, text)
+  // The engine prefixes toasts and log lines with the plugin name already.
+  const bare = text.replace(/^secret-mask: /, '')
+  log($, bare)
   try {
-    $.ui.toast(text)
+    $.ui.toast(bare)
   } catch {
     // nothing to do
   }

@@ -108,6 +108,7 @@ Checked on Claude Code 2.1.310 with `claude -p --plugin-dir . --model haiku` and
 - **Unknown placeholder:** `echo __SECRET_AWS_KEY_ID_DEADBEEF__` was denied with the reason above and did not run.
 - `/secret-mask status` and `/secret-mask test` ran in the interactive session; the self-test passed.
 - **After review fixes:** a file holding `password: ...`, a quoted value with spaces, and one value both before and after its `OTHER_SECRET=` assignment came back fully masked in the model's copy and in the stored `toolUseResult` (the same placeholder for every copy). A large output's saved file in this session's `tool-results` folder was still rewritten masked. An `@file` mention reached the model masked; its raw record on disk is described above.
+- **Round-2 fixes:** with `refuseSecretMentions` on, `@creds.txt` was refused before it was read: the transcript held no attachment row and no copy of the key, and the model read the file with Read instead and saw the placeholder. Ordinary metrics JSON (`token_count`, `token_kind`, `password_hint`) came back through Bash unchanged, and the model's Write of it was byte-for-byte valid JSON. A patterns file naming a pattern `1FAKE` was reported as refused by `/secret-mask test` (which then fails), its other pattern still masked, and `echo __SECRET_1FAKE_00000001__` was denied without running.
 
 ## Install
 
