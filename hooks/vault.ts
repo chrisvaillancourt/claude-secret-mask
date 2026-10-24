@@ -1,7 +1,7 @@
 // Pure masking and restoring over a Vault: no `$`, no I/O. The vault is the
 // only place a secret's value is kept; register.ts holds it in module memory.
-import { KIND_SOURCE, candidates, resolveOverlaps } from './detect'
-import type { Rules, Span } from './detect'
+import { KIND_SOURCE, candidates } from './detect'
+import type { Rules } from './detect'
 
 /** A placeholder this mod issues: `__SECRET_<KIND>_<8 uppercase hex>__`, KIND as `isKind` defines it. */
 export const PLACEHOLDER = new RegExp(`^__SECRET_${KIND_SOURCE}_[0-9A-F]{8}__$`)
@@ -37,14 +37,28 @@ export function placeholderFor(kind: string, hex: string): string {
 /** What a mask call did: how many spans it replaced and the kinds of new secrets. */
 export type MaskTally = { count: number; added: string[] }
 
-function issue(value: string, kind: string, vault: Vault, mint: Mint, text: string, tally: MaskTally): string {
+/**
+ * Whether a token occurs in the unit. Built once per unit: every occurrence
+ * of a placeholder starts with `__SECRET_`, so only those offsets are checked
+ * (exactly what `unit.includes(token)` answers, without rescanning the unit
+ * for each new secret).
+ */
+type InUnit = (token: string) => boolean
+
+function inUnit(unit: string): InUnit {
+  const at: number[] = []
+  for (let i = unit.indexOf('__SECRET_'); i !== -1; i = unit.indexOf('__SECRET_', i + 1)) at.push(i)
+  return token => at.some(i => unit.startsWith(token, i))
+}
+
+function issue(value: string, kind: string, vault: Vault, mint: Mint, isInUnit: InUnit, tally: MaskTally): string {
   const known = vault.byValue.get(value)
   if (known !== undefined) return known
   if (vault.byToken.size >= MAX_SECRETS) throw new Error('the vault is full')
   for (let i = 0; i < 16; i++) {
     const token = placeholderFor(kind, mint())
     if (!PLACEHOLDER.test(token)) throw new Error('mint answered a token outside the placeholder form')
-    if (vault.byToken.has(token) || text.includes(token)) continue
+    if (vault.byToken.has(token) || isInUnit(token)) continue
     vault.byValue.set(value, token)
     vault.byToken.set(token, { value, kind })
     tally.added.push(kind)
@@ -53,16 +67,28 @@ function issue(value: string, kind: string, vault: Vault, mint: Mint, text: stri
   throw new Error('could not mint an unused placeholder')
 }
 
-/** Literal occurrences of values the vault already holds. */
-function knownSpans(text: string, vault: Vault): (Span & { rank: number })[] {
-  const out: (Span & { rank: number })[] = []
-  for (const [value, token] of vault.byValue) {
-    const kind = vault.byToken.get(token)?.kind ?? 'SECRET'
-    for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + value.length)) {
-      out.push({ start: at, end: at + value.length, value, kind, rank: -1 })
-    }
-  }
-  return out
+const known = new WeakMap<Vault, { size: number; re: RegExp | null }>()
+
+/**
+ * One regex matching any value the vault holds, longest first, so a left-to-
+ * right scan takes the earliest and then longest occurrence, as overlaps are
+ * settled everywhere else. One pass over the text whatever the vault's size
+ * (R4-1: one `indexOf` scan per value took 11.8 s for 10,000 values in 4 MB,
+ * past the hooks worker's 5 s heartbeat). Rebuilt only when the vault grows.
+ */
+function knownPattern(vault: Vault): RegExp | null {
+  const cached = known.get(vault)
+  if (cached !== undefined && cached.size === vault.byValue.size) return cached.re
+  const values = [...vault.byValue.keys()].sort((a, b) => b.length - a.length)
+  const re = values.length === 0 ? null : new RegExp(values.map(v => v.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&')).join('|'), 'g')
+  known.set(vault, { size: vault.byValue.size, re })
+  return re
+}
+
+/** Whether the text holds any value the vault already knows. */
+export function holdsKnownValue(text: string, vault: Vault): boolean {
+  const re = knownPattern(vault)
+  return re !== null && text.search(re) !== -1
 }
 
 /**
@@ -90,10 +116,10 @@ function segments(text: string, vault: Vault): { text: string; isOwn: boolean }[
  * the inner one is masked too; overlaps are settled only at substitution.
  * Candidates come in rule order, so a known format's kind wins a shared value.
  */
-function discover(text: string, vault: Vault, rules: Rules, mint: Mint, unit: string, tally: MaskTally) {
+function discover(text: string, vault: Vault, rules: Rules, mint: Mint, isInUnit: InUnit, tally: MaskTally) {
   const segs = segments(text, vault)
   if (segs.length === 1) {
-    for (const s of candidates(text, rules)) issue(s.value, s.kind, vault, mint, unit, tally)
+    for (const s of candidates(text, rules)) issue(s.value, s.kind, vault, mint, isInUnit, tally)
     return
   }
   // Issued placeholders in the text: scan it whole too (so a JSON document
@@ -106,28 +132,25 @@ function discover(text: string, vault: Vault, rules: Rules, mint: Mint, unit: st
     at += seg.text.length
   }
   for (const s of candidates(text, rules)) {
-    if (!own.some(([a, b]) => s.start < b && a < s.end)) issue(s.value, s.kind, vault, mint, unit, tally)
+    if (!own.some(([a, b]) => s.start < b && a < s.end)) issue(s.value, s.kind, vault, mint, isInUnit, tally)
   }
   for (const seg of segs) {
     if (seg.isOwn) continue
-    for (const s of candidates(seg.text, rules)) issue(s.value, s.kind, vault, mint, unit, tally)
+    for (const s of candidates(seg.text, rules)) issue(s.value, s.kind, vault, mint, isInUnit, tally)
   }
 }
 
 /** Pass two: replaces every occurrence of every known value. */
 function substitute(text: string, vault: Vault, tally: MaskTally): string {
+  const re = knownPattern(vault)
+  if (re === null) return text
   return segments(text, vault)
     .map(seg => {
       if (seg.isOwn) return seg.text
-      const spans = resolveOverlaps(knownSpans(seg.text, vault))
-      let out = ''
-      let at = 0
-      for (const s of spans) {
-        out += seg.text.slice(at, s.start) + vault.byValue.get(s.value)!
-        at = s.end
+      return seg.text.replace(re, value => {
         tally.count++
-      }
-      return out + seg.text.slice(at)
+        return vault.byValue.get(value)!
+      })
     })
     .join('')
 }
@@ -138,8 +161,8 @@ function substitute(text: string, vault: Vault, tally: MaskTally): string {
  * order of the strings.
  */
 function maskUnit(texts: readonly string[], vault: Vault, rules: Rules, mint: Mint, tally: MaskTally): string[] {
-  const unit = texts.join('\n')
-  for (const t of texts) discover(t, vault, rules, mint, unit, tally)
+  const isInUnit = inUnit(texts.join('\n'))
+  for (const t of texts) discover(t, vault, rules, mint, isInUnit, tally)
   return texts.map(t => substitute(t, vault, tally))
 }
 

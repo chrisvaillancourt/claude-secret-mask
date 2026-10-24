@@ -24,7 +24,7 @@ import {
   WITHHELD,
 } from './policy'
 import type { Stats } from './policy'
-import { maskBlocks, maskDeep, maskText, newVault, restoreFields } from './vault'
+import { holdsKnownValue, maskBlocks, maskDeep, maskText, newVault, restoreFields } from './vault'
 import type { MaskTally, Vault } from './vault'
 import type { Config } from '../types'
 
@@ -180,9 +180,12 @@ async function maskPersisted($: EngineInterface, result: unknown) {
     }
     try {
       const text = await $.fs.read(real)
+      // A safe state on disk before any unbounded work (R4-1): if the hooks
+      // worker is lost while masking, the file holds the marker, not the raw
+      // text. A rejected marker write lands in the catch and is tried again.
+      await $.fs.write(real, WITHHELD)
       const out = maskText(text, ctx.vault, ctx.rules, mint)
-      if (out.count === 0) continue
-      await $.fs.write(real, out.text)
+      await $.fs.write(real, out.count === 0 ? text : out.text)
       tally(out)
     } catch (err) {
       log($, `could not mask a saved tool output (${err instanceof Error ? err.name : 'error'}); replacing it with the withheld marker`)
@@ -222,8 +225,7 @@ async function mentionVerdict($: EngineInterface, path: string): Promise<'secret
   } catch {
     return 'unreadable'
   }
-  const known = [...ctx.vault.byValue.keys()].some(v => text.includes(v))
-  return known || findSecrets(text, ctx.rules).length > 0 ? 'secret' : undefined
+  return holdsKnownValue(text, ctx.vault) || findSecrets(text, ctx.rules).length > 0 ? 'secret' : undefined
 }
 
 /** Best effort: tell the person on screen and in the log. Never pass a value here. */

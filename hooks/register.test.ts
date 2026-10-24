@@ -14,6 +14,8 @@ const PERSISTED = `/home/t/.claude/projects/-x/${SID}/tool-results/b1.txt`
 
 const world = (on: On, files: Record<string, string> = {}) => {
   const written: Record<string, string> = {}
+  /** Every write, in order. */
+  const writeLog: { path: string; text: string }[] = []
   /** Symbolic links: a path and where it lands. */
   const links: Record<string, string> = {}
   on('session.id', () => ({ value: SID }))
@@ -34,6 +36,7 @@ const world = (on: On, files: Record<string, string> = {}) => {
     if (unwritable.has(e.path)) return { deny: `EACCES: permission denied, open '${e.path}'` }
     if (e.text.length > writeLimit) return { deny: 'refused: the text is over the 4194304-byte limit' }
     written[e.path] = e.text
+    writeLog.push({ path: e.path, text: e.text })
     files[e.path] = e.text
     return { value: undefined }
   })
@@ -92,6 +95,7 @@ const world = (on: On, files: Record<string, string> = {}) => {
     unwritable,
     limitWrites: (n: number) => (writeLimit = n),
     setEnv: (out: typeof envOut) => (envOut = out),
+    writeLog,
     processRuns,
     mentioned, session, ran, written, errorNext: () => (errorNext = true), persistNext: (path = PERSISTED) => (persistNext = path), links, files }
 }
@@ -373,6 +377,33 @@ describe('restoring tool input', () => {
     expect(w.written[PERSISTED]).toBeDefined()
     expect(w.written[PERSISTED]!.includes(KEY)).toBe(false)
     expect(w.written[PERSISTED]).toMatch(PH)
+  })
+
+  test('a saved output is withheld on disk before masking starts, then written masked (R4-1)', async ($, on) => {
+    const w = world(on)
+    await start($)
+    w.persistNext()
+    await $.tool.call({ tool: 'Bash', command: `echo ${KEY}` })
+    // If the worker is lost while masking, the file already holds the marker.
+    expect(w.writeLog.filter(x => x.path === PERSISTED).map(x => (x.text === WITHHELD ? 'marker' : x.text.includes(KEY) ? 'raw' : 'masked'))).toEqual(['marker', 'masked'])
+  })
+
+  test('a saved output stays withheld on disk when masking it throws (R4-1)', async ($, on) => {
+    const w = world(on)
+    await start($)
+    w.persistNext()
+    const keys = Array.from({ length: 10001 }, (_, i) => `AKIAFAKE${String(i).padStart(12, '0')}`).join(' ')
+    const r: any = await $.tool.call({ tool: 'Bash', command: `echo ${keys}` })
+    expect(w.files[PERSISTED]).toBe(WITHHELD)
+    expect(JSON.stringify(r).includes('AKIAFAKE000000000001')).toBe(false)
+  })
+
+  test('a saved output with no secret is written back as it was', async ($, on) => {
+    const w = world(on)
+    await start($)
+    w.persistNext()
+    await $.tool.call({ tool: 'Bash', command: 'echo nothing secret here' })
+    expect(w.files[PERSISTED]).toBe('lots of output\nran: echo nothing secret here\n')
   })
 
   test('a saved output too large to read is replaced by the withheld marker', async ($, on) => {

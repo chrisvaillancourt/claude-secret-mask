@@ -289,6 +289,17 @@ describe('restoring', () => {
     ])
   })
 
+  test('ten thousand distinct secrets in a 4 MB output mask well inside the worker heartbeat (R4-1)', async () => {
+    const keys = Array.from({ length: MAX_SECRETS }, (_, i) => `AKIAFAKE${String(i).padStart(12, '0')}`)
+    const text = `${Array.from({ length: 19 }, () => keys.join('\n')).join('\n')}\n`
+    expect(text.length).toBe(3990000)
+    const t0 = performance.now()
+    const out = maskText(text, newVault(), rules, counter())
+    const ms = performance.now() - t0
+    expect(out.count).toBe(190000)
+    expect(ms < 1500).toBe(true)
+  })
+
   test('the vault refuses to grow past its bound', async () => {
     const keys = Array.from({ length: MAX_SECRETS + 1 }, (_, i) => `AKIAFAKE${String(i).padStart(12, '0')}`).join(' ')
     expect(() => maskText(keys, newVault(), rules, counter())).toThrow()

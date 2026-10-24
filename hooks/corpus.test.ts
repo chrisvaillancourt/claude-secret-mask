@@ -84,6 +84,7 @@ export const CORPUS: readonly Row[] = [
   { format: 'json', name: 'R3-3: _authToken key', input: '{"_authToken": "FAKEunderscore0000"}', mask: ['FAKEunderscore0000'] },
   { format: 'json', name: 'NDJSON line', input: '{"level":"info","token":"FAKEndjson0000one"}\n{"level":"info","msg":"ok"}', mask: ['FAKEndjson0000one'] },
   { format: 'json', name: 'the rest of a log line', input: '2026-10-24T00:00:00Z INFO {"user":"app","password":"FAKElogtail0000"}', mask: ['FAKElogtail0000'] },
+  { format: 'json', name: 'the rest of a log line after a bracketed timestamp', input: '[2026-10-24 00:00:00] INFO {"password":"FAKElogtail0001"}', mask: ['FAKElogtail0001'] },
   { format: 'json', name: 'a body after HTTP headers', input: 'HTTP/1.1 200 OK\ncontent-type: application/json\n\n{"data": {"access_token": "FAKEaccess0000token", "expires_in": 3600}}', mask: ['FAKEaccess0000token'] },
   { format: 'json', name: 'escaped string: as written and decoded', input: '{"password":"FAKE\\"quoted\\"0000"}\nplain FAKE"quoted"0000', mask: ['FAKE\\"quoted\\"0000', 'FAKE"quoted"0000'] },
   { format: 'json', name: 'strings in an array under a secret key', input: '{"token": ["FAKEarray0000one", "FAKEarray0000two"]}', mask: ['FAKEarray0000one', 'FAKEarray0000two'] },
