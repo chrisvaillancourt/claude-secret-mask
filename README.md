@@ -1,24 +1,88 @@
 # secret-mask
 
-A Claude Code mod (function-hook plugin). Replace this paragraph with what the mod does and why, in two or three sentences.
+A Claude Code mod (function-hook plugin) for reversible secret masking. Secrets in what reaches the model (tool output above all) are replaced with stable placeholders such as `__SECRET_AWS_KEY_ID_3F9A1C7E__`. When the model uses a placeholder in a Bash command, the mod puts the real value back just before the command runs. The model can work with a credential it never reads.
 
-> This repository is also the template for new mods: `scripts/new-mod.sh <mod-name>` creates `../claude-<mod-name>` with every `secret-mask` renamed, a fresh git history and one commit. Delete this note in the new repo.
+This is masking on the paths the mod API lets a plugin rewrite, not a vault or an exfiltration firewall. Read [What it does not cover](#what-it-does-not-cover) before you rely on it.
 
 ## Behavior
 
-- What the mod does, when, and to which conversations (main only, or subagents too).
-- What it costs (model calls, tokens) and how the options bound it.
-- What it never does.
+- **Detects** well-known token formats: AWS access key IDs, GitHub tokens (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), GitLab, Slack tokens and webhooks, Anthropic and OpenAI keys, Stripe, Google API keys, npm, Hugging Face, JWTs, PEM private key blocks, `Authorization: Bearer` values and passwords in URLs. It also masks the value of an assignment whose name looks secret (`AWS_SECRET_ACCESS_KEY=...`, `"api_token": "..."`, `password: ...`) when the value is at least 12 characters and doesn't look like a reference (`${VAR}`, `$VAR`, `<...>`), a path or a URL. You can add your own patterns and an allow-list in a file outside the repo (see [Patterns file](#patterns-file)). There is no generic entropy detector.
+- **Masks** in the main conversation and in subagents:
+  - every row the conversation keeps (`session.append`, all doors: your prompt, tool results, deliveries from other agents and sessions, hook context, attachments, compaction summaries, the model's own text). This is what the model reads and what the transcript file stores.
+  - the prompt as you submit it (`prompt.submit`), so the queued record matches.
+  - the tool's structured result (`tool.call`), which the screen draws and the transcript stores beside the model's copy.
+  - messages sent to other agents or sessions (`session.send`).
+  - the first message's context blocks (`prompt.context`: CLAUDE.md and the like), only when a secret is found there.
+- **Placeholders** are stable per secret for as long as the mod stays loaded, are made of ASCII word characters (inert if they ever reach a shell unrestored), and carry the kind of secret so the model knows what it holds.
+- **Restores** placeholders in tool-call input just before the tool runs:
+
+  | Tool | Fields restored |
+  | --- | --- |
+  | Bash, PowerShell | `command` |
+  | Write, Edit, NotebookEdit | `content`, `old_string`, `new_string`, `new_source`, only when `restoreIntoFiles` is on (default off: a placeholder is written to the file as is) |
+  | MCP tools (`mcp__*`) | every string argument, only when `restoreInMcp` is on (default off) |
+  | Agent, Task, SendMessage, everything else | never |
+
+  If a restored field holds a placeholder the mod can't resolve (from before a reload or restart), the call is denied with a reason that says so. A tool result that echoes a restored secret is masked again, to the same placeholder.
+- **The mapping** (secret to placeholder) lives in the mod's own memory only. It is never written to disk, `$.state`, `$.store`, logs, status lines, command output or deny reasons. A hot reload, a restart or `--resume` drops it: placeholders already in the conversation then can't be restored, and calls that need them are denied. `/clear` keeps it.
+- **Off** (`/secret-mask off`) stops masking new content. Placeholders already issued are still restored, so work in flight doesn't run commands with placeholder text.
+- **Costs** no model calls and no tokens beyond the placeholders themselves. Each row and tool result is scanned with regular expressions in the mod's process; large outputs take proportionally longer.
+
+## What it does not cover
+
+These routes reach the model, the screen or the disk without passing through anything a mod can rewrite. A secret there is not masked.
+
+- **The screen before the rewrite.** Claude Code may draw a row just before `session.append` rewrites it, and streams the model's reply as it is written. The structured tool result is masked before it is drawn (checked live, see below).
+- **What runs with the real value.** Restoring happens before Claude Code's permission check, so the permission prompt, the auto-mode classifier (a model) and PreToolUse hooks see the restored command, and so does the process: a command that writes the secret to a file writes the real value. A command that transforms the secret (`base64`, `rev`, splitting it) prints a form no pattern recognises. Masking keeps a secret from being read in plain sight; it does not stop a model that sets out to reveal it.
+- **Thinking and tool-use blocks** are pinned by the engine and can't be rewritten. The model can only write what it has read, so this matters only for a secret that came in by an uncovered route.
+- **Images, PDFs and other media** are not scanned.
+- **The system prompt and tool descriptions** are not scanned.
+- **History loaded by `--resume`, teleport or a saved subagent transcript** is not re-scanned.
+- **A failed tool's error record.** When a tool reports an error, the model's copy is masked at `session.append`, but the error record stored beside it is kept as made.
+- **Slash-command arguments** reach the command unmasked (its rows in the conversation are masked). The prompt-history line (up-arrow) is not verified.
+- **Secrets split by line wraps or across blocks**, values shorter than the thresholds, unusual encodings, and formats the patterns don't know.
+- **Other plugins** can see and reintroduce secrets, and nothing protects you when the mod is off, fails to load, or is skipped.
 
 ## Command
 
-`/secret-mask [on|off|status]`: show or set whether the mod is on for this session.
+`/secret-mask [on|off|status|test]`
+
+- `status` (the default): whether masking is on and why, how many distinct secrets were masked by kind, and how many masks, restores and denials happened since the mod loaded. Never values.
+- `on` / `off`: set masking for this session; overrides the `enabled` option.
+- `test`: runs built-in canary secrets (obviously fake) and your patterns file through the same masking and restoring code the hooks use, on a scratch mapping, and reports what was masked, what round-tripped and which near-misses were left alone.
 
 ## Options
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `enabled` | `true` | Turn the mod on for new sessions. `/secret-mask on|off` overrides it per session. |
+| `enabled` | `true` | Mask in new sessions. `/secret-mask on\|off` overrides it per session. |
+| `restoreIntoFiles` | `false` | Also restore placeholders into Write, Edit and NotebookEdit content, which writes the real secret into the file. |
+| `restoreInMcp` | `false` | Also restore placeholders into MCP tool arguments. |
+| `patternsFile` | `~/.config/secret-mask/patterns.json` | Your own patterns and allow-list. A missing file is fine; an invalid one is reported by `status` and `test`. |
+
+## Patterns file
+
+JSON, outside any repository:
+
+```json
+{
+  "patterns": [
+    { "name": "internal-token", "regex": "itk_[A-Za-z0-9]{32}" },
+    { "name": "db-password", "regex": "DB_PASS=(\\S{8,})", "group": 1 }
+  ],
+  "allow": ["a-literal-value-that-is-not-secret"],
+  "allowPatterns": ["^sk_test_"]
+}
+```
+
+- `patterns`: `name` (letters, digits, `-` and `_`; it becomes the placeholder's kind), `regex`, optional `flags` (`i`, `m`, `s`, `u`) and `group` (mask only that capture group). A pattern that can match an empty string is refused.
+- `allow`: exact values never masked. `allowPatterns`: values matching any of these are never masked.
+
+The file is read at session start and on reload.
+
+## Live checks
+
+Checked on Claude Code 2.1.310 with `claude -p --plugin-dir`; see `AGENTS.md` for the method. Findings are recorded in the commit that adds them.
 
 ## Install
 
