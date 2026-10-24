@@ -89,6 +89,8 @@ export const CORPUS: readonly Row[] = [
   { format: 'json', name: 'the rest of a log line', input: '2026-10-24T00:00:00Z INFO {"user":"app","password":"FAKElogtail0000"}', mask: ['FAKElogtail0000'] },
   { format: 'json', name: 'the rest of a log line after a bracketed timestamp', input: '[2026-10-24 00:00:00] INFO {"password":"FAKElogtail0001"}', mask: ['FAKElogtail0001'] },
   { format: 'json', name: 'a body after HTTP headers', input: 'HTTP/1.1 200 OK\ncontent-type: application/json\n\n{"data": {"access_token": "FAKEaccess0000token", "expires_in": 3600}}', mask: ['FAKEaccess0000token'] },
+  { format: 'json', name: 'R5-3: brackets in a header line do not use up the scan before the body', input: `HTTP/1.1 200 OK\nX-Trace: [[[[[[[[\nContent-Type: application/json\n\n${JSON.stringify({ token: ['FAKE_HTTP_SMALL_0000'], padding: 'x'.repeat(1024) })}\nechoed=FAKE_HTTP_SMALL_0000`, mask: ['FAKE_HTTP_SMALL_0000'] },
+  { format: 'json', name: 'R5-3: a body over 1 MiB after headers', input: `HTTP/1.1 200 OK\nContent-Type: application/json\n\n${JSON.stringify({ token: ['FAKE_EMBEDDED_0000'], padding: 'x'.repeat(1100000) })}\nechoed=FAKE_EMBEDDED_0000`, mask: ['FAKE_EMBEDDED_0000'] },
   { format: 'json', name: 'escaped string: as written and decoded', input: '{"password":"FAKE\\"quoted\\"0000"}\nplain FAKE"quoted"0000', mask: ['FAKE\\"quoted\\"0000', 'FAKE"quoted"0000'] },
   { format: 'json', name: 'strings in an array under a secret key', input: '{"token": ["FAKEarray0000one", "FAKEarray0000two"]}', mask: ['FAKEarray0000one', 'FAKEarray0000two'] },
   { format: 'json', name: 'a dotenv line inside a JSON string', input: '[{"Config":{"Env":["PATH=/usr/bin","POSTGRES_PASSWORD=FAKEdocker0000env"]}}]', mask: ['FAKEdocker0000env'] },
@@ -198,7 +200,8 @@ describe('detection corpus', () => {
       })
     } else {
       test(id, async () => {
-        expect(check(row)).toBe(undefined)
+        // Cut: a large row's whole output would not fit the test report.
+        expect(check(row)?.slice(0, 300)).toBe(undefined)
       })
     }
   }

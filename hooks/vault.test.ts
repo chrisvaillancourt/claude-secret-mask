@@ -317,6 +317,18 @@ describe('restoring', () => {
     expect(findSecrets('xFAKEinner0000x and FAKEinner0000', known).map(s => [s.kind, s.value])).toEqual([['OUTER', 'xFAKEinner0000x'], ['INNER', 'FAKEinner0000']])
   })
 
+  test('when the JSON scan cannot finish, masking fails (and the hooks withhold) instead of skipping documents (R5-3)', async () => {
+    // Every line opens a document that never closes: each scan runs to the end.
+    const text = `${'{\n'.repeat(20000)}{"password":"FAKEafter0000"}\n`
+    expect(() => maskText(text, newVault(), rules, counter())).toThrow('JSON')
+  })
+
+  test('nested braces at line starts, as in code, are scanned within the budget', async () => {
+    const block = (d: number): string => (d === 0 ? 'x = 1;\n' : `{\n${block(d - 1)}${block(d - 1)}}\n`)
+    const code = block(10).repeat(20)
+    expect(maskText(code, newVault(), rules, counter()).text).toBe(code)
+  })
+
   test('the vault refuses to grow past its bound', async () => {
     const keys = Array.from({ length: MAX_SECRETS + 1 }, (_, i) => `AKIAFAKE${String(i).padStart(12, '0')}`).join(' ')
     expect(() => maskText(keys, newVault(), rules, counter())).toThrow()

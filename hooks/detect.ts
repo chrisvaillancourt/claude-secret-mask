@@ -320,7 +320,7 @@ function balancedEnd(text: string, open: number, limit: number): number {
   for (let i = open; i < text.length && i < limit; i++) {
     const c = text[i]
     if (c === '"') {
-      for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === '\\') i++
+      for (i++; i < text.length && i < limit && text[i] !== '"'; i++) if (text[i] === '\\') i++
     } else if (c === '{' || c === '[') depth++
     else if (c === '}' || c === ']') {
       if (--depth === 0) return i + 1
@@ -329,37 +329,54 @@ function balancedEnd(text: string, open: number, limit: number): number {
   return -1
 }
 
-/** The longest JSON document looked for inside other text; a whole-text document has no limit. */
-const MAX_EMBEDDED_JSON = 1024 * 1024
-
 /** How many opening brackets of one line are tried as the start of a document. */
 const MAX_OPENS_PER_LINE = 8
 
+/** How many passes over the text line-start document scans may take in all. */
+const JSON_SCAN_PASSES = 16
+
+/** Thrown when the JSON scan can't finish within its budget: the caller withholds the unit (R5-3). */
+export class JsonScanIncomplete extends Error {
+  constructor() {
+    super('the JSON document scan ran past its budget, so the text could not be fully checked')
+    this.name = 'JsonScanIncomplete'
+  }
+}
+
 /**
  * JSON: the whole text, or else each document that starts at one of a line's
- * first few `{` or `[` and runs to its matching bracket (NDJSON lines, a log
- * line's tail, a pretty-printed body after headers), where `JSON.parse`
- * accepts it. Text that doesn't parse gets no JSON handling. Bracket scans
- * are charged against a budget of a few passes over the text, each scan at
- * most 1 MiB, so code full of braces or unclosed brackets stays linear; once
- * the budget is spent the rest of the text gets no JSON handling.
+ * first few `{` or `[` and runs to its matching bracket, where `JSON.parse`
+ * accepts it. A document that starts a line (after indentation: NDJSON, a
+ * pretty-printed body after HTTP headers) may run over many lines; one that
+ * starts mid-line (a log line's tail) must close on its line, so header text
+ * like `X-Trace: [[[[` costs only its own line. Line-start scans share a
+ * budget of JSON_SCAN_PASSES passes over the text; if it runs out before
+ * every line-start document was scanned, this throws JsonScanIncomplete and
+ * the unit is withheld: an unfinished scan is never taken as coverage.
  */
 function jsonFinds(text: string, out: Found[], depth: number) {
   const trimmed = text.trim()
   if (/^[{[]/.test(trimmed) && parses(trimmed)) return walkJson(trimmed, text.indexOf(trimmed), out, depth)
-  let budget = 8 * text.length
-  for (let lineAt = 0; lineAt < text.length && budget > 0; ) {
+  let budget = JSON_SCAN_PASSES * text.length + 1024
+  for (let lineAt = 0; lineAt < text.length; ) {
     const nl = text.indexOf('\n', lineAt)
     const lineEnd = nl === -1 ? text.length : nl
     let next = lineEnd + 1
     let from = lineAt
-    for (let tries = 0; tries < MAX_OPENS_PER_LINE && budget > 0; tries++) {
+    const indent = /^[ \t]*/.exec(text.slice(lineAt, Math.min(lineEnd, lineAt + 256)))![0].length
+    for (let tries = 0; tries < MAX_OPENS_PER_LINE; tries++) {
       const rel = text.slice(from, lineEnd).search(/[{[]/)
       if (rel === -1) break
       from += rel
-      const limit = from + Math.min(budget, MAX_EMBEDDED_JSON)
-      const close = balancedEnd(text, from, limit)
-      budget -= (close === -1 ? Math.min(limit, text.length) : close) - from
+      const isLineStart = from === lineAt + indent
+      let close: number
+      if (isLineStart) {
+        if (budget <= 0) throw new JsonScanIncomplete()
+        close = balancedEnd(text, from, from + budget)
+        const scanned = (close === -1 ? text.length : close) - from
+        if (close === -1 && from + budget < text.length) throw new JsonScanIncomplete()
+        budget -= scanned
+      } else close = balancedEnd(text, from, lineEnd)
       if (close !== -1) {
         const doc = text.slice(from, close)
         if (parses(doc)) {
