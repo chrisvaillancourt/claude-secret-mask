@@ -42,7 +42,7 @@ These routes reach the model, the screen or the disk without passing through any
 - **The system prompt and tool descriptions** are not scanned.
 - **History loaded by `--resume`, teleport or a saved subagent transcript** is not re-scanned.
 - **Large outputs of tools other than Bash.** Claude Code saves an output too large to keep inline to a file before any hook runs. The mod masks the file a Bash (or MCP raw output) result names; another tool's saved file is left as written.
-- **Managed plugins seated above it.** An organization's plugin in the `prepend` tier runs before every user plugin and can pass an event on past them. On the machine this was checked on, the organization's built-in plugin did that for `prompt.context` (every session) and for one row appended at startup, so neither reached this mod. The debug log names each case: `secret-mask: ... bypassed by <plugin>`, and Claude Code shows `its <event> hook was skipped`.
+- **Managed plugins seated above it.** An organization's plugin in the `prepend` tier runs before every user plugin and can pass an event on past them. On the machine this was checked on, a managed plugin did that for `prompt.context` (every session) and for one row appended at startup, so neither reached this mod. The debug log names each case: `secret-mask: ... bypassed by <plugin>`, and Claude Code shows `its <event> hook was skipped`.
 - **Slash-command arguments** reach the command unmasked (its rows in the conversation are masked). The prompt-history line (up-arrow) is not verified.
 - **Secrets split by line wraps or across blocks**, values shorter than the thresholds, unusual encodings, and formats the patterns don't know.
 - **Other plugins** can see and reintroduce secrets, and nothing protects you when the mod is off, fails to load, or is skipped.
@@ -103,6 +103,7 @@ Checked on Claude Code 2.1.310 with `claude -p --plugin-dir . --model haiku` and
 - **Errors and large outputs:** before the fix, a failing command's error record and a large output's saved file kept the raw key; both are masked now (re-checked live).
 - **Unknown placeholder:** `echo __SECRET_AWS_KEY_ID_DEADBEEF__` was denied with the reason above and did not run.
 - `/secret-mask status` and `/secret-mask test` ran in the interactive session; the self-test passed.
+- **After review fixes:** a file holding `password: ...`, a quoted value with spaces, and one value both before and after its `OTHER_SECRET=` assignment came back fully masked in the model's copy and in the stored `toolUseResult` (the same placeholder for every copy). A large output's saved file in this session's `tool-results` folder was still rewritten masked. An `@file` mention reached the model masked; its raw record on disk is described above.
 
 ## Install
 
