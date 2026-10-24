@@ -10,6 +10,7 @@ import {
   expandHome,
   isActive,
   isMediaPath,
+  isMissingPathError,
   isSessionToolResult,
   MAX_MENTION_BYTES,
   mentionReason,
@@ -160,8 +161,14 @@ async function sessionToolResult($: EngineInterface, path: string): Promise<stri
 
 /** Why a mentioned file must be refused, or undefined to let it through. */
 async function mentionVerdict($: EngineInterface, path: string): Promise<'secret' | 'unreadable' | 'too-large' | undefined> {
-  const stat = await $.fs.stat(path).catch(() => undefined)
-  if (stat === undefined || stat.kind !== 'file') return undefined // nothing to attach
+  let stat: Awaited<ReturnType<EngineInterface['fs']['stat']>>
+  try {
+    stat = await $.fs.stat(path)
+  } catch (err) {
+    // Only a path positively reported missing has nothing to attach.
+    return isMissingPathError(err) ? undefined : 'unreadable'
+  }
+  if (stat.kind !== 'file') return undefined // nothing to attach
   if (stat.size > MAX_MENTION_BYTES) return 'too-large'
   let text: string
   try {

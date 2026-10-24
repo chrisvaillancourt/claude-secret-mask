@@ -80,6 +80,17 @@ export function isMediaPath(path: string): boolean {
 /** The largest file an @-mention check reads; a bigger one is refused. */
 export const MAX_MENTION_BYTES = 5 * 1024 * 1024
 
+/**
+ * Whether a `$.fs.stat` rejection means the path is missing, and nothing
+ * else. Checked live on 2.1.310: the engine rejects with a `HooksError`
+ * whose message ends in the errno (`<plugin>: $.fs.stat(<path>) failed:
+ * ENOENT`, `... failed: EACCES`), with no `code`. Any other failure (access,
+ * I/O, not a directory) is not proof the file is absent.
+ */
+export function isMissingPathError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'HooksError' && /: ENOENT$/.test(err.message)
+}
+
 /** Why an @-mention was refused. Names the mention as typed, never a value. */
 export function mentionReason(mention: string, why: 'secret' | 'unreadable' | 'too-large'): string {
   const what =

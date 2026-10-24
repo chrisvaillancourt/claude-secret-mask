@@ -17,10 +17,14 @@ const world = (on: On, files: Record<string, string> = {}) => {
   /** Symbolic links: a path and where it lands. */
   const links: Record<string, string> = {}
   on('session.id', () => ({ value: SID }))
+  /** Paths whose stat fails with this errno although the file may be there. */
+  const statErrors: Record<string, string> = {}
   on('fs.stat', ($, e) => {
     const real = links[e.path] ?? e.path
     const isDir = real === '/home/t/.claude/projects'
-    if (!isDir && files[real] === undefined) return { deny: `ENOENT: no such file, stat '${e.path}'` }
+    if (statErrors[e.path] !== undefined) return { deny: statErrors[e.path]! }
+    // The engine's rejection ends in the errno: `$.fs.stat(<path>) failed: ENOENT`.
+    if (!isDir && files[real] === undefined) return { deny: 'ENOENT' }
     return { value: { kind: isDir ? 'dir' : 'file', size: 1, mtimeMs: 0, isLink: e.path in links, ...(e.resolve ? { realPath: real } : {}) } }
   })
   /** Writes refused outright, and the longest text a write takes (the engine's is 4 MiB). */
@@ -75,6 +79,7 @@ const world = (on: On, files: Record<string, string> = {}) => {
   })
   return {
     unreadable,
+    statErrors,
     oversize,
     unwritable,
     limitWrites: (n: number) => (writeLimit = n),
@@ -230,6 +235,19 @@ describe('@-mentions', () => {
     const r: any = await mention($, '/x/locked.txt')
     expect(w.mentioned).toEqual([])
     expect(r.deny).toContain('could not be checked')
+  })
+
+  test('a file whose stat fails for any reason but a missing path is refused', async ($, on) => {
+    const w = world(on, { '/x/creds.txt': `aws_access_key_id = ${KEY}\n`, '/x/notes.txt': 'nothing here\n' })
+    w.statErrors['/x/creds.txt'] = 'EIO'
+    w.statErrors['/x/notes.txt'] = 'EACCES'
+    w.statErrors['/x/odd.txt'] = 'ENOTDIR'
+    await start($)
+    for (const p of ['/x/creds.txt', '/x/notes.txt', '/x/odd.txt']) {
+      const r: any = await mention($, p)
+      expect(r.deny).toContain('could not be checked')
+    }
+    expect(w.mentioned).toEqual([])
   })
 
   test('refuseSecretMentions off, or masking off, lets it through', { options: { refuseSecretMentions: false } }, async ($, on) => {

@@ -2,9 +2,24 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { CANARIES } from './canaries'
 import { builtinRules } from './detect'
-import { INITIAL, configFrom, expandHome, isActive, isSessionToolResult, parseArgs, restoreFieldsFor, selfTest, statusText, withheld } from './policy'
+import { INITIAL, configFrom, expandHome, isActive, isMissingPathError, isSessionToolResult, parseArgs, restoreFieldsFor, selfTest, statusText, withheld } from './policy'
 
 describe('policy', () => {
+  test('isMissingPathError takes only a stat rejection that ends in ENOENT', async () => {
+    const err = (message: string, name = 'HooksError') => Object.assign(new Error(message), { name })
+    // The engine's own message (2.1.310) and the test kit's.
+    expect(isMissingPathError(err('secret-mask: $.fs.stat(/x/missing.txt) failed: ENOENT'))).toBe(true)
+    expect(isMissingPathError(err('secret-mask: $.fs.stat: ENOENT'))).toBe(true)
+    for (const errno of ['EACCES', 'EIO', 'ENOTDIR', 'ELOOP', 'ENAMETOOLONG']) {
+      expect(isMissingPathError(err(`secret-mask: $.fs.stat(/x/f.txt) failed: ${errno}`))).toBe(false)
+    }
+    // A path that spells ENOENT is not the errno.
+    expect(isMissingPathError(err('secret-mask: $.fs.stat(/x/ENOENT) failed: EIO'))).toBe(false)
+    expect(isMissingPathError(err('secret-mask: $.fs.stat(/x/f.txt) failed: ENOENT', 'TypeError'))).toBe(false)
+    expect(isMissingPathError('ENOENT')).toBe(false)
+    expect(isMissingPathError(undefined)).toBe(false)
+  })
+
   test('parseArgs reads on, off, status, test and rejects the rest', async () => {
     expect(parseArgs('')).toEqual({ kind: 'status' })
     expect(parseArgs(' ON ')).toEqual({ kind: 'set', mode: 'on' })
