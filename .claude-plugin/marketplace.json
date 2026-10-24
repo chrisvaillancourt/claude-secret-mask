@@ -1,0 +1,13 @@
+{
+  "name": "secret-mask",
+  "owner": {
+    "name": "Chris Vaillancourt"
+  },
+  "plugins": [
+    {
+      "name": "secret-mask",
+      "source": "./"
+    }
+  ],
+  "description": "Masks secrets in tool output before the model sees them and restores them when the model uses the placeholder in a tool call."
+}
