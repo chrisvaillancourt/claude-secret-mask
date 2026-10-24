@@ -45,6 +45,7 @@ const world = (on: On, files: Record<string, string> = {}) => {
   on('session.send', ($, e) => ({ isDelivered: true as const, text: e.text }) as any)
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('prompt.context', ($, e) => ({ blocks: e.blocks }))
+  on('prompt.attachment', ($, e) => ({ text: e.text }))
   return { session, ran, written, errorNext: () => (errorNext = true), persistNext: () => (persistNext = true) }
 }
 
@@ -155,6 +156,18 @@ describe('masking rows', () => {
     expect(out.blocks[0]!.text.includes(KEY)).toBe(false)
     expect(out.blocks[1]).toEqual({ name: 'currentDate', text: 'today' })
   })
+})
+
+test('a mentioned file\'s attachment text is masked for the model, main and subagent', async ($, on) => {
+  world(on)
+  await start($)
+  const main: any = await $.prompt.attachment({ type: 'file', text: `creds.txt:\naws_access_key_id = ${KEY}`, origin: { kind: 'engine' } } as any)
+  expect(main.text.includes(KEY)).toBe(false)
+  expect(main.text).toMatch(PH)
+  const sub: any = await $.prompt.attachment({ type: 'file', text: `again ${KEY}`, origin: { kind: 'engine' }, agentId: 'a1' } as any)
+  expect(sub.text.includes(KEY)).toBe(false)
+  const none: any = await $.prompt.attachment({ type: 'todo_reminder', text: 'nothing here', origin: { kind: 'engine' } } as any)
+  expect(none.text).toBe('nothing here')
 })
 
 describe('restoring tool input', () => {

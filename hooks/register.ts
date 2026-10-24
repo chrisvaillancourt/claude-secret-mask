@@ -221,6 +221,18 @@ export const register: Register = (on, options) => {
     return next({ ...e, text: maskString(e.text) })
   }).catch(($, e, next) => (next.called ? next(e) : { isDelivered: false, reason: 'secret-mask could not mask this message' }))
 
+  // What the model reads for an injected attachment: a mentioned @file, a
+  // reminder, a settings hook's context. The transcript keeps the engine's
+  // own record of the attachment (its payload and rendering) as made.
+  on('prompt.attachment', async ($, e, next) => {
+    const r = await next(e)
+    if (r.text === null || !(await active($))) return r
+    const out = maskText(r.text, ctx.vault, ctx.rules, mint)
+    if (out.count === 0) return r
+    tally(out)
+    return { ...r, text: out.text }
+  })
+
   on('prompt.context', async ($, e, next) => {
     const r = await next(e)
     if (!(await active($))) return r
