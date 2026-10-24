@@ -1,11 +1,17 @@
 // Pure masking and restoring over a Vault: no `$`, no I/O. The vault is the
 // only place a secret's value is kept; register.ts holds it in module memory.
-import { candidates, resolveOverlaps } from './detect'
+import { KIND_SOURCE, candidates, resolveOverlaps } from './detect'
 import type { Rules, Span } from './detect'
 
-/** A placeholder this mod issues: `__SECRET_<KIND>_<8 uppercase hex>__`. */
-export const PLACEHOLDER = /__SECRET_[A-Z][A-Z0-9_]{0,23}?_[0-9A-F]{8}__/
-const PLACEHOLDERS = new RegExp(PLACEHOLDER.source, 'g')
+/** A placeholder this mod issues: `__SECRET_<KIND>_<8 uppercase hex>__`, KIND as `isKind` defines it. */
+export const PLACEHOLDER = new RegExp(`^__SECRET_${KIND_SOURCE}_[0-9A-F]{8}__$`)
+
+/**
+ * The reserved shape: anything that looks like a placeholder, issued by this
+ * version, an older one (a digit-led KIND) or nobody. Restoring treats every
+ * match not in the vault as unknown and denies the call.
+ */
+const RESERVED = /__SECRET_[A-Za-z0-9_]+?_[0-9A-Fa-f]{8}__/g
 
 export type Vault = {
   /** Secret value to its placeholder. */
@@ -16,6 +22,9 @@ export type Vault = {
 
 /** Answers 8 uppercase hex digits; random in the mod, a counter in tests. */
 export type Mint = () => string
+
+/** The most distinct secrets one load holds; past it masking throws (and the hooks withhold). */
+export const MAX_SECRETS = 10000
 
 export function newVault(): Vault {
   return { byValue: new Map(), byToken: new Map() }
@@ -31,6 +40,7 @@ export type MaskTally = { count: number; added: string[] }
 function issue(value: string, kind: string, vault: Vault, mint: Mint, text: string, tally: MaskTally): string {
   const known = vault.byValue.get(value)
   if (known !== undefined) return known
+  if (vault.byToken.size >= MAX_SECRETS) throw new Error('the vault is full')
   for (let i = 0; i < 16; i++) {
     const token = placeholderFor(kind, mint())
     if (!PLACEHOLDER.test(token)) throw new Error('mint answered a token outside the placeholder form')
@@ -63,7 +73,7 @@ function knownSpans(text: string, vault: Vault): (Span & { rank: number })[] {
 function segments(text: string, vault: Vault): { text: string; isOwn: boolean }[] {
   const out: { text: string; isOwn: boolean }[] = []
   let at = 0
-  for (const m of text.matchAll(PLACEHOLDERS)) {
+  for (const m of text.matchAll(RESERVED)) {
     if (!vault.byToken.has(m[0])) continue
     const start = m.index ?? 0
     out.push({ text: text.slice(at, start), isOwn: false }, { text: m[0], isOwn: true })
@@ -201,7 +211,7 @@ export type Restored = { text: string; count: number; unknown: string[] }
 export function restoreText(text: string, vault: Vault): Restored {
   let count = 0
   const unknown = new Set<string>()
-  const out = text.replace(PLACEHOLDERS, token => {
+  const out = text.replace(RESERVED, token => {
     const entry = vault.byToken.get(token)
     if (entry === undefined) {
       unknown.add(token)
@@ -214,7 +224,7 @@ export function restoreText(text: string, vault: Vault): Restored {
 }
 
 /** Keys of a tool call's input that are the engine's, never the tool's arguments. */
-const RESERVED = new Set(['tool', 'tool_use_id', 'agentId', 'requestMeta', 'consent'])
+const ENGINE_KEYS = new Set(['tool', 'tool_use_id', 'agentId', 'requestMeta', 'consent'])
 
 /**
  * Restores placeholders in a tool call's input: in the named top-level string
@@ -242,7 +252,7 @@ export function restoreFields<T extends Record<string, unknown>>(
   }
   const out: Record<string, unknown> = { ...input }
   for (const [k, v] of Object.entries(input)) {
-    if (RESERVED.has(k)) continue
+    if (ENGINE_KEYS.has(k)) continue
     if (fields === 'all') out[k] = deep(v)
     else if (fields.includes(k) && typeof v === 'string') out[k] = one(v)
   }

@@ -25,8 +25,9 @@ This is masking on the paths the mod API lets a plugin rewrite, not a vault or a
   | MCP tools (`mcp__*`) | every string argument, only when `restoreInMcp` is on (default off) |
   | Agent, Task, SendMessage, everything else | never |
 
-  If a restored field holds a placeholder the mod can't resolve (from before a reload or restart), the call is denied with a reason that says so. A tool result that echoes a restored secret is masked again, to the same placeholder.
+  If a restored field holds anything shaped like a placeholder (`__SECRET_..._<8 hex>__`) that the mod can't resolve (from before a reload or restart, an older version, or made up), the call is denied with a reason that says so. A tool result that echoes a restored secret is masked again, to the same placeholder.
 - **The mapping** (secret to placeholder) lives in the mod's own memory only. It is never written to disk, `$.state`, `$.store`, logs, status lines, command output or deny reasons. A hot reload, a restart or `--resume` drops it: placeholders already in the conversation then can't be restored, and calls that need them are denied. `/clear` keeps it.
+- **If masking fails** (a bug, or more than 10,000 distinct secrets in one load), nothing is stored raw: the tool result is withheld (the model reads a fixed `[secret-mask: text withheld because masking failed]`, and the stored record holds the same), a row or attachment holds that marker, a prompt is dropped with a message, and a saved output file is overwritten with the marker.
 - **Off** (`/secret-mask off`) stops masking new content. Placeholders already issued are still restored, so work in flight doesn't run commands with placeholder text.
 - **Costs** no model calls and no tokens beyond the placeholders themselves. Each row and tool result is scanned with regular expressions in the mod's process; large outputs take proportionally longer.
 
@@ -87,7 +88,7 @@ JSON, outside any repository:
 }
 ```
 
-- `patterns`: `name` (letters, digits, `-` and `_`; it becomes the placeholder's kind), `regex`, optional `flags` (`i`, `m`, `s`, `u`) and `group` (mask only that capture group). A pattern that can match an empty string is refused.
+- `patterns`: `name` (it becomes the placeholder's kind: uppercased, other characters turned to `_`, at most 24 characters, and it must start with a letter; a name that can't is refused and reported), `regex`, optional `flags` (`i`, `m`, `s`, `u`) and `group` (mask only that capture group). A pattern that can match an empty string is refused.
 - `allow`: exact values never masked. `allowPatterns`: values matching any of these are never masked.
 
 The file is read at session start and on reload.

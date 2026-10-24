@@ -246,6 +246,27 @@ describe('restoring tool input', () => {
     expect(JSON.parse(out)).toEqual(JSON.parse(json))
   })
 
+  test('an older reserved-shape placeholder denies the call', async ($, on) => {
+    const w = world(on)
+    await start($)
+    const r: any = await $.tool.call({ tool: 'Bash', command: 'echo __SECRET_1FAKE_00000001__' })
+    expect(w.ran.length).toBe(0)
+    expect(r.deny ?? r.text).toContain('not in the current mapping')
+  })
+
+  test('when masking throws, nothing is stored raw: result, row and attachment are withheld', async ($, on) => {
+    const w = world(on)
+    await start($)
+    // Past the vault's bound, masking throws.
+    const keys = Array.from({ length: 10001 }, (_, i) => `AKIAFAKE${String(i).padStart(12, '0')}`).join(' ')
+    const r: any = await $.tool.call({ tool: 'Bash', command: `echo ${keys}` })
+    expect(JSON.stringify(r).includes('AKIAFAKE000000000001')).toBe(false)
+    await append($, [{ type: 'tool_result', tool_use_id: 'tx', content: keys }])
+    expect(stored(w).includes('AKIAFAKE000000000001')).toBe(false)
+    const a: any = await $.prompt.attachment({ type: 'file', text: keys, origin: { kind: 'engine' } } as any)
+    expect((a.text ?? '').includes('AKIAFAKE000000000001')).toBe(false)
+  })
+
   test('a result with nothing to mask is passed through as core made it', async ($, on) => {
     world(on)
     await start($)
@@ -346,6 +367,16 @@ describe('command', () => {
     const s = (await run($, 'status')).text
     expect(s).toContain('1 pattern')
     expect(s).toContain('pattern "bad"')
+  })
+
+  test('test fails when the patterns file has refused entries', async ($, on) => {
+    world(on, {
+      '/home/t/.config/secret-mask/patterns.json': JSON.stringify({ patterns: [{ name: '1FAKE', regex: 'FAKECUSTOM[0-9]{8}' }] }),
+    })
+    await start($)
+    const s = (await run($, 'test')).text
+    expect(s).toContain('Self-test FAILED')
+    expect(s).toContain('1FAKE')
   })
 
   test('an unknown argument answers with usage', async ($, on) => {

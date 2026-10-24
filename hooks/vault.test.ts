@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { CANARIES, NEAR_MISSES } from './canaries'
 import { builtinRules, findSecrets, parsePatternsFile, withUserRules } from './detect'
-import { PLACEHOLDER, maskBlocks, maskDeep, maskText, newVault, restoreFields, restoreText } from './vault'
+import { MAX_SECRETS, PLACEHOLDER, maskBlocks, maskDeep, maskText, newVault, restoreFields, restoreText } from './vault'
 
 /** Deterministic tokens: 00000001, 00000002, ... */
 const counter = () => {
@@ -50,6 +50,13 @@ describe('detection', () => {
     const r = withUserRules(rules, parsed)
     expect(findSecrets('use itk_FAKE0000 now', r).map(s => [s.kind, s.value])).toEqual([['INTERNAL_TOKEN', 'itk_FAKE0000']])
     expect(findSecrets('DBPASS=FAKEfake00', r).map(s => [s.kind, s.value])).toEqual([['DB_PASS', 'FAKEfake00']])
+  })
+
+  test('a pattern whose name cannot be a placeholder kind is refused at load', async () => {
+    const parsed = parsePatternsFile(JSON.stringify({ patterns: [{ name: '1FAKE', regex: 'FAKECUSTOM[0-9]{8}' }, { name: '---', regex: 'x[0-9]{4}' }] }))
+    expect(parsed.patterns).toEqual([])
+    expect(parsed.errors.length).toBe(2)
+    expect(parsed.errors[0]).toContain('1FAKE')
   })
 
   test('a patterns file that is not JSON is one error', async () => {
@@ -205,6 +212,19 @@ describe('restoring', () => {
     const v = newVault()
     const masked = maskText('AKIAFAKEFAKEFAKE0000', v, rules, counter()).text
     expect(restoreText(`aws --key ${masked}`, v)).toEqual({ text: 'aws --key AKIAFAKEFAKEFAKE0000', count: 1, unknown: [] })
+  })
+
+  test('any reserved-shape token not in the vault is unknown, older issued forms included', async () => {
+    const v = newVault()
+    expect(restoreText('echo __SECRET_1FAKE_00000001__ __SECRET_X_Y_0000000A__', v).unknown).toEqual([
+      '__SECRET_1FAKE_00000001__',
+      '__SECRET_X_Y_0000000A__',
+    ])
+  })
+
+  test('the vault refuses to grow past its bound', async () => {
+    const keys = Array.from({ length: MAX_SECRETS + 1 }, (_, i) => `AKIAFAKE${String(i).padStart(12, '0')}`).join(' ')
+    expect(() => maskText(keys, newVault(), rules, counter())).toThrow()
   })
 
   test('an unknown placeholder is reported, not guessed', async () => {

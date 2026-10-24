@@ -17,6 +17,7 @@ import {
   statusText,
   unknownReason,
   withheld,
+  WITHHELD,
 } from './policy'
 import type { Stats } from './policy'
 import { maskBlocks, maskDeep, maskText, newVault, restoreFields } from './vault'
@@ -124,7 +125,13 @@ async function maskPersisted($: EngineInterface, result: unknown) {
         continue
       }
       const text = await $.fs.read(real)
-      const out = maskText(text, ctx.vault, ctx.rules, mint)
+      let out: ReturnType<typeof maskText>
+      try {
+        out = maskText(text, ctx.vault, ctx.rules, mint)
+      } catch {
+        await $.fs.write(real, WITHHELD)
+        continue
+      }
       if (out.count === 0) continue
       tally(out)
       await $.fs.write(real, out.text)
@@ -171,7 +178,9 @@ export const register: Register = (on, options) => {
     if (cmd.kind === 'help') return { text: cmd.error ? `${cmd.error}\n${USAGE}` : USAGE }
     if (cmd.kind === 'test') {
       const out = selfTest(ctx.rules, ctx.config)
-      return { text: `${out.text}\n${patternsLine(ctx.stats.patterns)}` }
+      const refused = ctx.stats.patterns.errors.length > 0
+      const text = refused ? out.text.replace(/^Self-test passed/, 'Self-test FAILED (the patterns file has refused entries)') : out.text
+      return { text: `${text}\n${patternsLine(ctx.stats.patterns)}` }
     }
     if (cmd.kind === 'set') await update($, sessionAtom, s => ({ ...s, mode: cmd.mode }))
     return { text: statusText(ctx.config, await read($, sessionAtom), ctx.stats) }
@@ -198,7 +207,7 @@ export const register: Register = (on, options) => {
     const text = maskString(e.text)
     const context = e.context?.map(maskString)
     return next({ ...e, text, ...(context ? { context } : {}) })
-  }).catch(($, e, next) => next(e)) // fail open: session.append masks the row either way
+  }).catch(() => ({ drop: 'secret-mask could not mask this prompt, so it was not sent.' }))
 
   on('tool.call', async ($, e, next) => {
     let input = e
@@ -218,24 +227,32 @@ export const register: Register = (on, options) => {
     // A result we put a secret into is masked even while masking is off.
     if (res.deny !== undefined) return res
     if (restored === 0 && !(await active($))) return res
-    if (res.isError === true) {
-      // An error's record is stored as made, so withhold it: the model reads
-      // the masked text as the refusal and the record holds no secret.
-      const text = typeof res.text === 'string' ? res.text : typeof res.result === 'string' ? res.result : ''
-      const raw = typeof res.result === 'string' ? res.result : ''
-      const masked = maskText(text, ctx.vault, ctx.rules, mint)
-      const inRecord = raw === text ? masked : maskText(raw, ctx.vault, ctx.rules, mint)
-      tally(masked)
-      return masked.count + inRecord.count === 0 ? res : { deny: masked.text }
+    try {
+      if (res.isError === true) {
+        // An error's record is stored as made, so withhold it: the model reads
+        // the masked text as the refusal and the record holds no secret.
+        const text = typeof res.text === 'string' ? res.text : typeof res.result === 'string' ? res.result : ''
+        const raw = typeof res.result === 'string' ? res.result : ''
+        const masked = maskText(text, ctx.vault, ctx.rules, mint)
+        const inRecord = raw === text ? masked : maskText(raw, ctx.vault, ctx.rules, mint)
+        tally(masked)
+        return masked.count + inRecord.count === 0 ? res : { deny: masked.text }
+      }
+      await maskPersisted($, res.result)
+      const m = maskDeep(res.result, ctx.vault, ctx.rules, mint)
+      tally(m)
+      if (m.count === 0) return res
+      // Our own result: core maps it for the model and records it as the
+      // tool's result, so the screen and the transcript get the masked form.
+      return { result: m.value as typeof res.result, ...(res.context ? { context: res.context } : {}) }
+    } catch {
+      // Masking failed: withhold the whole result (model copy and record).
+      return { deny: WITHHELD }
     }
-    await maskPersisted($, res.result)
-    const m = maskDeep(res.result, ctx.vault, ctx.rules, mint)
-    tally(m)
-    if (m.count === 0) return res
-    // Our own result: core maps it for the model and records it as the
-    // tool's result, so the screen and the transcript get the masked form.
-    return { result: m.value as typeof res.result, ...(res.context ? { context: res.context } : {}) }
-  }).catch(($, e, next) => (next.called ? next(e) : { deny: 'secret-mask: restoring this call failed, so it did not run.' }))
+  }).catch(($, e, next) =>
+    // Never replay what ran beneath: its result may hold the secret.
+    next.called ? { deny: WITHHELD } : { deny: 'secret-mask: restoring this call failed, so it did not run.' },
+  )
 
   on('session.send', async ($, e, next) => {
     if (!(await active($))) return next(e)
@@ -252,7 +269,7 @@ export const register: Register = (on, options) => {
     if (out.count === 0) return r
     tally(out)
     return { ...r, text: out.text }
-  })
+  }).catch(() => ({ text: WITHHELD }))
 
   on('prompt.context', async ($, e, next) => {
     const r = await next(e)
@@ -266,5 +283,5 @@ export const register: Register = (on, options) => {
       return { ...b, text: out.text }
     })
     return changed ? { ...r, blocks } : r
-  })
+  }).catch(($, e) => ({ blocks: e.blocks.map(b => ({ ...b, text: WITHHELD })) }))
 }

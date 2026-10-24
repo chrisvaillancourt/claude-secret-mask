@@ -106,6 +106,13 @@ export function builtinRules(): Rules {
   return { patterns: BUILTIN, allow: new Set(), allowPatterns: [] }
 }
 
+/** A placeholder KIND: an uppercase letter, then up to 23 of A-Z, 0-9 and _. One contract for parsing, minting and recognising. */
+export const KIND_SOURCE = '[A-Z][A-Z0-9_]{0,23}'
+
+export function isKind(kind: string): boolean {
+  return new RegExp(`^${KIND_SOURCE}$`).test(kind) && !kind.endsWith('_')
+}
+
 /** A user pattern's name as a placeholder kind: A-Z, 0-9 and _, at most 24. */
 export function kindOf(name: string): string {
   return (
@@ -113,7 +120,8 @@ export function kindOf(name: string): string {
       .toUpperCase()
       .replace(/[^A-Z0-9]+/g, '_')
       .replace(/^_+|_+$/g, '')
-      .slice(0, 24) || 'USER'
+      .slice(0, 24)
+      .replace(/_+$/, '')
   )
 }
 
@@ -162,7 +170,9 @@ export function parsePatternsFile(text: string): ParsedPatterns {
     if (group !== undefined && !(typeof group === 'number' && Number.isInteger(group) && group >= 0)) {
       return void out.errors.push(`pattern "${name}": group must be a whole number`)
     }
-    out.patterns.push({ kind: kindOf(name), re, ...(group ? { group } : {}) })
+    const kind = kindOf(name)
+    if (!isKind(kind)) return void out.errors.push(`pattern "${name}": the name must start with a letter (it becomes the placeholder's kind)`)
+    out.patterns.push({ kind, re, ...(group ? { group } : {}) })
   })
   list('allow').forEach((a, i) => {
     if (typeof a === 'string' && a !== '') out.allow.push(a)
