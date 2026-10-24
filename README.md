@@ -1,6 +1,6 @@
 # secret-mask
 
-A Claude Code mod (function-hook plugin) for reversible secret masking. Secrets in what reaches the model (tool output above all) are replaced with stable placeholders such as `__SECRET_AWS_KEY_ID_3F9A1C7E__`. When the model uses a placeholder in a Bash command, the mod puts the real value back just before the command runs. The model can work with a credential it never reads.
+A Claude Code mod (function-hook plugin) for reversible secret masking. Secrets in what reaches the model (tool output above all) are replaced with stable placeholders such as `__SECRET_AWS_KEY_ID_3F9A1C7E__`. When the model uses a placeholder in a shell command, the mod puts the real value back just before the command runs. The model can work with a credential it never reads.
 
 This is masking on the paths the mod API lets a plugin rewrite, not a vault or an exfiltration firewall. Read [What it does not cover](#what-it-does-not-cover) before you rely on it.
 
@@ -19,7 +19,7 @@ This is masking on the paths the mod API lets a plugin rewrite, not a vault or a
 
   | Tool | Fields restored |
   | --- | --- |
-  | Bash, PowerShell | `command` |
+  | Bash, PowerShell, Monitor | `command` |
   | Write, Edit, NotebookEdit | `content`, `old_string`, `new_string`, `new_source`, only when `restoreIntoFiles` is on (default off: a placeholder is written to the file as is) |
   | MCP tools (`mcp__*`) | every string argument, only when `restoreInMcp` is on (default off) |
   | Agent, Task, SendMessage, everything else | never |
@@ -44,6 +44,14 @@ These routes reach the model, the screen or the disk without passing through any
 - **Slash-command arguments** reach the command unmasked (its rows in the conversation are masked). The prompt-history line (up-arrow) is not verified.
 - **Secrets split by line wraps or across blocks**, values shorter than the thresholds, unusual encodings, and formats the patterns don't know.
 - **Other plugins** can see and reintroduce secrets, and nothing protects you when the mod is off, fails to load, or is skipped.
+
+### Cut from v0.1
+
+- Masking the model's streamed reply (`turn.step`). The model only writes what it read, so this matters only for secrets that came in by an uncovered route.
+- Reading secret values from environment variables by name (`$.env.get` needs literal names, so this would be a fixed list). `env` and `printenv` output is covered by the assignment rule; a bare `printenv SOME_SECRET` of a format no pattern knows is not.
+- Masking slash-command arguments at `command.run` and skill bodies at `skill.prompt` (their rows are masked at `session.append`).
+- A reveal command, friendly labels in placeholders, and placeholders that stay the same across restarts.
+- Not verified: whether masking a Read result changes how a later Edit of the same file checks what was read; the prompt-history (up-arrow) line.
 
 ## Command
 
