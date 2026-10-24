@@ -91,10 +91,39 @@ describe('masking', () => {
     const twice = maskText(once, v, rules, mint)
     expect(twice.text).toBe(once)
     expect(twice.count).toBe(0)
-    // A placeholder this vault never issued stays text, unmapped.
+    // A placeholder this vault never issued has no protection: it is scanned
+    // like any text (here the assignment rule takes it as a value).
     const foreign = maskText('MY_TOKEN=__SECRET_GITHUB_TOKEN_DEADBEEF__', v, rules, mint)
-    expect(foreign.text).toBe('MY_TOKEN=__SECRET_GITHUB_TOKEN_DEADBEEF__')
-    expect(v.byToken.size).toBe(1)
+    expect(foreign.text).toBe('MY_TOKEN=__SECRET_SECRET_VALUE_00000002__')
+  })
+
+  test('a known value inside foreign placeholder-shaped text is still masked', async () => {
+    const v = newVault()
+    const mint = counter()
+    maskText('AKIAFAKEFAKEFAKE0000', v, rules, mint)
+    const out = maskText('__SECRET_AKIAFAKEFAKEFAKE0000_DEADBEEF__ and __SECRET_X_AKIAFAKEFAKEFAKE0000__', v, rules, mint)
+    expect(out.text.includes('AKIAFAKEFAKEFAKE0000')).toBe(false)
+  })
+
+  test('a newly found value is masked everywhere in the unit: before, after, across fields and blocks', async () => {
+    const X = 'FAKErepeated0000'
+    const one = maskText(`echoed=${X}\nOTHER_SECRET=${X}\nagain ${X}`, newVault(), rules, counter())
+    expect(one.text).toBe('echoed=__SECRET_SECRET_VALUE_00000001__\nOTHER_SECRET=__SECRET_SECRET_VALUE_00000001__\nagain __SECRET_SECRET_VALUE_00000001__')
+
+    const deep = maskDeep({ stdout: `echoed=${X}`, stderr: `DB_PASSWORD=${X}`, list: [X] }, newVault(), rules, counter())
+    expect(JSON.stringify(deep.value).includes(X)).toBe(false)
+
+    const blocks = maskBlocks(
+      [
+        { type: 'text', text: X },
+        { type: 'tool_result', tool_use_id: 't', content: [{ type: 'text', text: X }] },
+        { type: 'tool_result', tool_use_id: 'u', content: `token=${X}` },
+      ],
+      newVault(),
+      rules,
+      counter(),
+    )
+    expect(JSON.stringify(blocks.content).includes(X)).toBe(false)
   })
 
   test('a PEM key split across lines is masked as one secret', async () => {

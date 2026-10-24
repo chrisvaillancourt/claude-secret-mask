@@ -4,7 +4,7 @@ import { candidates, resolveOverlaps } from './detect'
 import type { Rules, Span } from './detect'
 
 /** A placeholder this mod issues: `__SECRET_<KIND>_<8 uppercase hex>__`. */
-export const PLACEHOLDER = /__SECRET_[A-Z0-9_]+?_[0-9A-F]{8}__/
+export const PLACEHOLDER = /__SECRET_[A-Z][A-Z0-9_]{0,23}?_[0-9A-F]{8}__/
 const PLACEHOLDERS = new RegExp(PLACEHOLDER.source, 'g')
 
 export type Vault = {
@@ -55,35 +55,64 @@ function knownSpans(text: string, vault: Vault): (Span & { rank: number })[] {
   return out
 }
 
-function maskSegment(seg: string, vault: Vault, rules: Rules, mint: Mint, whole: string, tally: MaskTally): string {
-  const spans = resolveOverlaps([...knownSpans(seg, vault), ...candidates(seg, rules)])
-  if (spans.length === 0) return seg
-  let out = ''
-  let at = 0
-  for (const s of spans) {
-    out += seg.slice(at, s.start) + issue(s.value, s.kind, vault, mint, whole, tally)
-    at = s.end
-    tally.count++
-  }
-  return out + seg.slice(at)
-}
-
-function maskInto(text: string, vault: Vault, rules: Rules, mint: Mint, tally: MaskTally): string {
-  // Placeholders already in the text are kept as they are and never scanned,
-  // so masking twice changes nothing and no rule matches across one.
-  let out = ''
+/**
+ * The text split around placeholders this vault issued. Only those are kept
+ * unscanned (so masking twice changes nothing); text merely shaped like a
+ * placeholder is scanned like any other.
+ */
+function segments(text: string, vault: Vault): { text: string; isOwn: boolean }[] {
+  const out: { text: string; isOwn: boolean }[] = []
   let at = 0
   for (const m of text.matchAll(PLACEHOLDERS)) {
+    if (!vault.byToken.has(m[0])) continue
     const start = m.index ?? 0
-    out += maskSegment(text.slice(at, start), vault, rules, mint, text, tally) + m[0]
+    out.push({ text: text.slice(at, start), isOwn: false }, { text: m[0], isOwn: true })
     at = start + m[0].length
   }
-  return out + maskSegment(text.slice(at), vault, rules, mint, text, tally)
+  out.push({ text: text.slice(at), isOwn: false })
+  return out
+}
+
+/** Pass one: registers every secret the patterns find, substituting nothing. */
+function discover(text: string, vault: Vault, rules: Rules, mint: Mint, unit: string, tally: MaskTally) {
+  for (const seg of segments(text, vault)) {
+    if (seg.isOwn) continue
+    for (const s of resolveOverlaps(candidates(seg.text, rules))) issue(s.value, s.kind, vault, mint, unit, tally)
+  }
+}
+
+/** Pass two: replaces every occurrence of every known value. */
+function substitute(text: string, vault: Vault, tally: MaskTally): string {
+  return segments(text, vault)
+    .map(seg => {
+      if (seg.isOwn) return seg.text
+      const spans = resolveOverlaps(knownSpans(seg.text, vault))
+      let out = ''
+      let at = 0
+      for (const s of spans) {
+        out += seg.text.slice(at, s.start) + vault.byValue.get(s.value)!
+        at = s.end
+        tally.count++
+      }
+      return out + seg.text.slice(at)
+    })
+    .join('')
+}
+
+/**
+ * Masks a unit (every string of one row or one result) in two passes, so a
+ * value found anywhere in the unit is masked everywhere in it, whatever the
+ * order of the strings.
+ */
+function maskUnit(texts: readonly string[], vault: Vault, rules: Rules, mint: Mint, tally: MaskTally): string[] {
+  const unit = texts.join('\n')
+  for (const t of texts) discover(t, vault, rules, mint, unit, tally)
+  return texts.map(t => substitute(t, vault, tally))
 }
 
 export function maskText(text: string, vault: Vault, rules: Rules, mint: Mint): { text: string } & MaskTally {
   const tally: MaskTally = { count: 0, added: [] }
-  return { text: maskInto(text, vault, rules, mint, tally), ...tally }
+  return { text: maskUnit([text], vault, rules, mint, tally)[0]!, ...tally }
 }
 
 type Block = { type: string; [field: string]: unknown }
@@ -91,44 +120,72 @@ type Block = { type: string; [field: string]: unknown }
 /**
  * Masks a row's blocks as session.append hands them: text blocks and each
  * tool_result's content (a string, or text blocks among others). Every other
- * block (thinking, tool_use, media) is returned as the same object.
+ * block (thinking, tool_use, media) is returned as the same object. The row
+ * is one unit.
  */
 export function maskBlocks<B extends Block>(content: readonly B[], vault: Vault, rules: Rules, mint: Mint): { content: B[] } & MaskTally {
   const tally: MaskTally = { count: 0, added: [] }
-  const text = (b: Block): Block => {
-    if (b.type !== 'text' || typeof b.text !== 'string') return b
-    const before = tally.count
-    const masked = maskInto(b.text, vault, rules, mint, tally)
-    return tally.count === before ? b : { ...b, text: masked }
+  // Collect the row's strings, mask them as one unit, then put them back in order.
+  const texts: string[] = []
+  const visit = (put: ((i: number) => string) | null) => {
+    const text = (b: Block): Block => {
+      if (b.type !== 'text' || typeof b.text !== 'string') return b
+      if (put === null) return texts.push(b.text), b
+      const masked = put(texts.length)
+      texts.push(b.text)
+      return masked === b.text ? b : { ...b, text: masked }
+    }
+    return content.map(b => {
+      if (b.type === 'text') return text(b) as B
+      if (b.type !== 'tool_result') return b
+      const inner = b.content
+      if (typeof inner === 'string') {
+        if (put === null) return texts.push(inner), b
+        const masked = put(texts.length)
+        texts.push(inner)
+        return masked === inner ? b : ({ ...b, content: masked } as B)
+      }
+      if (!Array.isArray(inner)) return b
+      let changed = false
+      const next = inner.map(x => {
+        if (typeof x !== 'object' || x === null) return x
+        const y = text(x as Block)
+        if (y !== x) changed = true
+        return y
+      })
+      return changed ? ({ ...b, content: next } as B) : b
+    })
   }
-  const out = content.map(b => {
-    if (b.type === 'text') return text(b) as B
-    if (b.type !== 'tool_result') return b
-    const before = tally.count
-    let inner: unknown = b.content
-    if (typeof inner === 'string') inner = maskInto(inner, vault, rules, mint, tally)
-    else if (Array.isArray(inner)) inner = inner.map(x => (typeof x === 'object' && x !== null ? text(x as Block) : x))
-    return tally.count === before ? b : ({ ...b, content: inner } as B)
-  })
+  visit(null)
+  const masked = maskUnit(texts, vault, rules, mint, tally)
+  texts.length = 0
+  const out = visit(i => masked[i]!)
   return { content: out, ...tally }
 }
 
-/** Masks every string value in a structured result; keys and base64 payloads are left alone. */
+/**
+ * Masks every string value in a structured result as one unit; keys and
+ * base64 payloads are left alone.
+ */
 export function maskDeep(value: unknown, vault: Vault, rules: Rules, mint: Mint): { value: unknown } & MaskTally {
   const tally: MaskTally = { count: 0, added: [] }
-  const walk = (v: unknown, skip: boolean): unknown => {
-    if (typeof v === 'string') return skip ? v : maskInto(v, vault, rules, mint, tally)
-    if (Array.isArray(v)) return v.map(x => walk(x, false))
+  const walk = (v: unknown, skip: boolean, on: (s: string) => string): unknown => {
+    if (typeof v === 'string') return skip ? v : on(v)
+    if (Array.isArray(v)) return v.map(x => walk(x, false, on))
     if (typeof v === 'object' && v !== null) {
       const o = v as Record<string, unknown>
       const isMedia = o.type === 'base64'
       const out: Record<string, unknown> = {}
-      for (const [k, x] of Object.entries(o)) out[k] = walk(x, k === 'base64' || (isMedia && k === 'data'))
+      for (const [k, x] of Object.entries(o)) out[k] = walk(x, k === 'base64' || (isMedia && k === 'data'), on)
       return out
     }
     return v
   }
-  const out = walk(value, false)
+  const texts: string[] = []
+  walk(value, false, s => (texts.push(s), s))
+  const masked = maskUnit(texts, vault, rules, mint, tally)
+  let i = 0
+  const out = walk(value, false, () => masked[i++]!)
   return { value: tally.count === 0 ? value : out, ...tally }
 }
 

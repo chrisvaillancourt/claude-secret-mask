@@ -188,6 +188,14 @@ describe('restoring tool input', () => {
     expect(w.written[PERSISTED]).toMatch(PH)
   })
 
+  test('a value found in a result is masked in every copy of the stored record', async ($, on) => {
+    world(on)
+    await start($)
+    const X = 'FAKErepeated0000'
+    const r: any = await $.tool.call({ tool: 'Bash', command: `printf 'echoed=${X}\\nOTHER_SECRET=${X}\\n'` })
+    expect(JSON.stringify(r.result).includes(X)).toBe(false)
+  })
+
   test('a result with nothing to mask is passed through as core made it', async ($, on) => {
     world(on)
     await start($)
