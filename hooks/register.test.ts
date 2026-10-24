@@ -49,6 +49,14 @@ const world = (on: On, files: Record<string, string> = {}) => {
     return text === undefined ? { deny: `ENOENT: no such file, open '${e.path}'` } : { value: text }
   })
   mock.env(on, { HOME: '/home/t' })
+  /** What `/usr/bin/env -0` prints, or a deny reason; each argv that ran. */
+  let envOut: { stdout: string } | { deny: string } = { stdout: 'HOME=/home/t\0' }
+  const processRuns: string[][] = []
+  on('process.run', ($, e) => {
+    processRuns.push([...e.argv])
+    if ('deny' in envOut) return { deny: envOut.deny }
+    return { value: { exitCode: 0, stdout: envOut.stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   const session = mock.session(on)
   const ran: Record<string, unknown>[] = []
   let errorNext = false
@@ -83,6 +91,8 @@ const world = (on: On, files: Record<string, string> = {}) => {
     oversize,
     unwritable,
     limitWrites: (n: number) => (writeLimit = n),
+    setEnv: (out: typeof envOut) => (envOut = out),
+    processRuns,
     mentioned, session, ran, written, errorNext: () => (errorNext = true), persistNext: (path = PERSISTED) => (persistNext = path), links, files }
 }
 
@@ -109,6 +119,74 @@ const learn = async ($: any, w: ReturnType<typeof world>) => {
 }
 
 const run = ($: any, args: string) => $.command.run({ command: 'secret-mask', args, ...COMMAND })
+
+describe('known values', () => {
+  const ENV_VALUE = 'FAKEenvtoken0000000'
+  const ENV = `HOME=/home/t\0SM_FAKE_TOKEN=${ENV_VALUE}\0DATABASE_URL=postgres://app:FAKE%40url0000@db/app\0MULTI_SECRET=FAKEline1\nFAKEline2\0`
+
+  test('a secret-named environment value is masked wherever it appears, and restored into Bash', async ($, on) => {
+    const w = world(on)
+    w.setEnv({ stdout: ENV })
+    await start($)
+    expect(w.processRuns).toEqual([['/usr/bin/env', '-0']])
+    // Printed bare (printenv), no pattern would find it.
+    await append($, [{ type: 'tool_result', tool_use_id: 't1', content: `${ENV_VALUE}\n` }])
+    const ph = stored(w).match(/__SECRET_ENV_SM_FAKE_TOKEN_[0-9A-F]{8}__/)?.[0]
+    expect(ph).toBeDefined()
+    expect(stored(w).includes(ENV_VALUE)).toBe(false)
+    const r: any = await $.tool.call({ tool: 'Bash', command: `echo ${ph}` })
+    expect(w.ran.at(-1)!.command).toBe(`echo ${ENV_VALUE}`)
+    expect(JSON.stringify(r.result).includes(ENV_VALUE)).toBe(false)
+  })
+
+  test('a connection URL password in the environment is masked raw and decoded; a multi-line value whole', async ($, on) => {
+    const w = world(on)
+    w.setEnv({ stdout: ENV })
+    await start($)
+    await append($, [{ type: 'text', text: 'pw FAKE%40url0000 and FAKE@url0000; FAKEline1\nFAKEline2' }], 'prompt')
+    const s = stored(w)
+    for (const v of ['FAKE%40url0000', 'FAKE@url0000', 'FAKEline1']) expect(s.includes(v)).toBe(false)
+  })
+
+  test('status counts environment values and never shows one', async ($, on) => {
+    const w = world(on)
+    w.setEnv({ stdout: ENV })
+    await start($)
+    const s = (await run($, 'status')).text
+    expect(s).toContain('Known values: 4 from the environment, 0 from the patterns file.')
+    for (const v of [ENV_VALUE, 'FAKE@url0000', 'FAKEline1']) expect(s.includes(v)).toBe(false)
+  })
+
+  test('an environment that cannot be read is reported, and masking goes on', async ($, on) => {
+    const w = world(on)
+    w.setEnv({ deny: 'spawn ENOENT' })
+    await start($)
+    expect((await run($, 'status')).text).toContain('could not read the environment')
+    await learn($, w)
+  })
+
+  test('an @-mention of a file holding an environment value is refused', async ($, on) => {
+    const w = world(on, { '/x/notes.txt': `the token is ${ENV_VALUE}` })
+    w.setEnv({ stdout: ENV })
+    await start($)
+    const r: any = await $.prompt.mention({ mention: 'notes.txt', path: '/x/notes.txt' })
+    expect(r.deny).toBeDefined()
+    expect(w.mentioned).toEqual([])
+  })
+
+  test('patterns-file secrets are masked, inside larger tokens too, and counted', async ($, on) => {
+    const w = world(on, {
+      '/home/t/.config/secret-mask/patterns.json': JSON.stringify({ secrets: [{ name: 'staging db', value: 'FAKEexact0000value' }, { value: 'short' }] }),
+    })
+    await start($)
+    await append($, [{ type: 'text', text: 'x-FAKEexact0000value-y' }], 'prompt')
+    expect(stored(w)).toMatch(/x-__SECRET_STAGING_DB_[0-9A-F]{8}__-y/)
+    const s = (await run($, 'status')).text
+    expect(s).toContain('1 from the patterns file')
+    expect(s).toContain('secret 2: value must be at least 8 characters')
+    expect(s.includes('FAKEexact0000value')).toBe(false)
+  })
+})
 
 describe('masking rows', () => {
   test('a tool result row is stored masked, and the same secret keeps its placeholder', async ($, on) => {

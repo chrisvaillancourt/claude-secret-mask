@@ -128,8 +128,13 @@ export type PatternsStatus = {
   /** `none`: no file (or unreadable, said in errors); `loaded`; `error`: read, with entries refused. */
   state: 'none' | 'loaded' | 'error'
   count: number
+  /** Exact values (`secrets`) loaded. */
+  values: number
   errors: string[]
 }
+
+/** The environment read at load: how many values it gave, or why it could not be read. Never a value. */
+export type EnvStatus = { count: number; error: string | null }
 
 /** Counts since the module loaded. Kinds and numbers only. */
 export type Stats = {
@@ -139,12 +144,23 @@ export type Stats = {
   restored: number
   denied: number
   patterns: PatternsStatus
+  env: EnvStatus
 }
 
 export function patternsLine(p: PatternsStatus): string {
   if (p.state === 'none') return `Patterns file: no patterns file at ${p.path}${p.errors.length ? ` (${p.errors.join('; ')})` : ''}.`
   const head = `Patterns file: ${p.path}, ${p.count} pattern${p.count === 1 ? '' : 's'} loaded`
   return p.errors.length === 0 ? `${head}.` : `${head}; refused: ${p.errors.join('; ')}.`
+}
+
+export function knownLine(env: EnvStatus, patterns: PatternsStatus): string {
+  const fromEnv =
+    env.error === null
+      ? `${env.count} from the environment`
+      : env.count > 0
+        ? `${env.count} from the environment (${env.error})`
+        : `could not read the environment (${env.error}), so none from it`
+  return `Known values: ${fromEnv}, ${patterns.values} from the patterns file.`
 }
 
 export function statusText(config: Config, session: Session, stats: Stats): string {
@@ -157,6 +173,7 @@ export function statusText(config: Config, session: Session, stats: Stats): stri
     `Masking ${state} (${source}).${state === 'off' ? ' Placeholders already issued are still restored.' : ''}`,
     `Since load: ${stats.masked} masked, ${stats.restored} restored, ${stats.denied} denied.`,
     `Distinct secrets: ${kinds.length === 0 ? 'none' : kinds.join(', ')}.`,
+    knownLine(stats.env, stats.patterns),
     `Restored into: Bash/PowerShell/Monitor command${config.restoreIntoFiles ? ', file content' : ''}${config.restoreInMcp ? ', MCP arguments' : ''}.`,
     patternsLine(stats.patterns),
   ].join('\n')

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { CANARIES } from './canaries'
 import { builtinRules } from './detect'
-import { INITIAL, configFrom, expandHome, isActive, isMissingPathError, isSessionToolResult, parseArgs, restoreFieldsFor, selfTest, statusText, withheld } from './policy'
+import { INITIAL, configFrom, expandHome, isActive, isMissingPathError, isSessionToolResult, parseArgs, restoreFieldsFor, selfTest, statusText, withheld, knownLine } from './policy'
 
 describe('policy', () => {
   test('isMissingPathError takes only a stat rejection that ends in ENOENT', async () => {
@@ -82,7 +82,8 @@ describe('policy', () => {
       masked: 5,
       restored: 1,
       denied: 0,
-      patterns: { path: '/home/t/p.json', state: 'error', count: 0, errors: ['pattern "x": can match an empty string'] },
+      env: { count: 2, error: null },
+      patterns: { path: '/home/t/p.json', state: 'error', count: 0, values: 0, errors: ['pattern "x": can match an empty string'] },
     })
     expect(text).toContain('on (from the enabled option)')
     expect(text).toContain('AWS_KEY_ID 2')
@@ -105,6 +106,13 @@ describe('policy', () => {
     expect(out.isPassing).toBe(false)
     expect(out.text).toContain('NOT masked')
     for (const c of CANARIES) expect(out.text.includes(c.value)).toBe(false)
+  })
+
+  test('knownLine reports environment counts, a cut read and a failed one, never a value', async () => {
+    const p = { path: '/p', state: 'loaded' as const, count: 0, values: 1, errors: [] }
+    expect(knownLine({ count: 3, error: null }, p)).toBe('Known values: 3 from the environment, 1 from the patterns file.')
+    expect(knownLine({ count: 3, error: 'its output was cut at 4 MiB' }, p)).toBe('Known values: 3 from the environment (its output was cut at 4 MiB), 1 from the patterns file.')
+    expect(knownLine({ count: 0, error: 'spawn ENOENT' }, p)).toContain('could not read the environment (spawn ENOENT)')
   })
 
   test('withheld replaces text and tool results and keeps other blocks', async () => {

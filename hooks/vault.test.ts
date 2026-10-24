@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { CANARIES, NEAR_MISSES } from './canaries'
-import { builtinRules, findSecrets, parsePatternsFile, withUserRules } from './detect'
+import { builtinRules, envSecrets, findSecrets, parseEnv0, parsePatternsFile, withKnownValues, withUserRules } from './detect'
 import { MAX_SECRETS, PLACEHOLDER, maskBlocks, maskDeep, maskText, newVault, restoreFields, restoreText } from './vault'
 
 /** Deterministic tokens: 00000001, 00000002, ... */
@@ -57,6 +57,49 @@ describe('detection', () => {
     expect(parsed.patterns).toEqual([])
     expect(parsed.errors.length).toBe(2)
     expect(parsed.errors[0]).toContain('1FAKE')
+  })
+
+  test('envSecrets takes omp\'s names, values of 8 or more, URL passwords raw and decoded, each value once', async () => {
+    const env = parseEnv0(
+      [
+        'GITHUB_TOKEN=FAKEgh0000token',
+        'NPM_AUTH=FAKEnpm0000auth',
+        'db_password=FAKEdb0000pass',
+        'SHORT_KEY=FAKE000',
+        'TOKENIZERS_PARALLELISM=false-but-long',
+        'KEYCHAIN_PATH=/not/a/secret/path',
+        'OTHER_TOKEN=FAKEgh0000token',
+        'DATABASE_URL=postgres://app:FAKE%2Furl0000@db/app',
+        'PEM_PRIVATE=FAKEline1\nFAKEline2',
+        '',
+      ].join('\0'),
+    )
+    expect(envSecrets(env)).toEqual([
+      { value: 'FAKEgh0000token', kind: 'ENV_GITHUB_TOKEN' },
+      { value: 'FAKEnpm0000auth', kind: 'ENV_NPM_AUTH' },
+      { value: 'FAKEdb0000pass', kind: 'ENV_DB_PASSWORD' },
+      { value: 'FAKEline1\nFAKEline2', kind: 'ENV_PEM_PRIVATE' },
+      { value: 'FAKE%2Furl0000', kind: 'URL_PASSWORD' },
+      { value: 'FAKE/url0000', kind: 'URL_PASSWORD' },
+    ])
+  })
+
+  test('a known value is masked inside a larger token, and the allow-list still wins', async () => {
+    const r = withKnownValues(rules, [{ value: 'FAKEknown0000', kind: 'ENV_X_TOKEN' }])
+    expect(findSecrets('a-FAKEknown0000-b', r).map(s => [s.kind, s.value])).toEqual([['ENV_X_TOKEN', 'FAKEknown0000']])
+    expect(findSecrets('FAKEknown0000', withUserRules(r, parsePatternsFile('{"allow":["FAKEknown0000"]}')))).toEqual([])
+  })
+
+  test('patterns-file secrets: exact values with a kind; unusable ones refused without echoing the value', async () => {
+    const parsed = parsePatternsFile(
+      JSON.stringify({ secrets: [{ name: 'staging-db', value: 'FAKEexact0000value' }, { value: 'FAKEnoname0000' }, { value: 'FAKE000' }, { value: '__SECRET_X_00000001__' }, { name: '9x', value: 'FAKEdigit0000' }, 'nope'] }),
+    )
+    expect(parsed.values).toEqual([
+      { value: 'FAKEexact0000value', kind: 'STAGING_DB' },
+      { value: 'FAKEnoname0000', kind: 'SECRET' },
+    ])
+    expect(parsed.errors.length).toBe(4)
+    for (const v of ['FAKE000', '__SECRET_X_00000001__', 'FAKEdigit0000']) expect(parsed.errors.join('\n').includes(v)).toBe(false)
   })
 
   test('a patterns file that is not JSON is one error', async () => {

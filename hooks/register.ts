@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import { builtinRules, findSecrets, parsePatternsFile, withUserRules } from './detect'
-import type { Rules } from './detect'
+import { builtinRules, envSecrets, findSecrets, parseEnv0, parsePatternsFile, withKnownValues, withUserRules } from './detect'
+import type { KnownValue, ParsedPatterns, Rules } from './detect'
 import {
   INITIAL,
   USAGE,
@@ -39,7 +39,15 @@ const sessionAtom = atom({ plugin: 'secret-mask', key: 'session' } as const, INI
  * (the only place a secret's value is kept), the rules and the counts. A hot
  * reload or restart drops it on purpose; see AGENTS.md.
  */
-type Ctx = { config: Config; vault: Vault; rules: Rules; stats: Stats }
+type Ctx = {
+  config: Config
+  vault: Vault
+  rules: Rules
+  /** The environment's secret values, read once per load; module memory only, like the vault. */
+  envValues: KnownValue[]
+  user: ParsedPatterns | null
+  stats: Stats
+}
 
 let ctx: Ctx = fresh(configFrom({}))
 
@@ -48,12 +56,15 @@ function fresh(config: Config): Ctx {
     config,
     vault: newVault(),
     rules: builtinRules(),
+    envValues: [],
+    user: null,
     stats: {
       secrets: {},
       masked: 0,
       restored: 0,
       denied: 0,
-      patterns: { path: config.patternsFile, state: 'none', count: 0, errors: [] },
+      patterns: { path: config.patternsFile, state: 'none', count: 0, values: 0, errors: [] },
+      env: { count: 0, error: null },
     },
   }
 }
@@ -84,10 +95,43 @@ async function active($: EngineInterface): Promise<boolean> {
   return isActive(ctx.config, await read($, sessionAtom))
 }
 
+/** The rules from the built-ins, the environment's values and the patterns file. */
+function rebuildRules() {
+  const base = withKnownValues(builtinRules(), ctx.envValues)
+  ctx.rules = ctx.user === null ? base : withUserRules(base, ctx.user)
+}
+
+/**
+ * Reads the environment once (`$.env.get` can't enumerate names) and keeps
+ * the secret values in module memory. Its output goes nowhere else: not a
+ * log, the store, status or an error. A failed read is reported by count and
+ * reason only, and masking goes on with the other sources.
+ */
+async function loadEnv($: EngineInterface) {
+  const status = ctx.stats.env
+  try {
+    const r = await $.process.run(['/usr/bin/env', '-0'], { timeoutMs: 10000 })
+    if (r.exitCode !== 0) throw new Error(`/usr/bin/env exited with ${r.exitCode}`)
+    ctx.envValues = envSecrets(parseEnv0(r.stdout))
+    status.count = ctx.envValues.length
+    status.error = r.isStdoutTruncated ? 'its output was cut at 4 MiB' : null
+  } catch (err) {
+    ctx.envValues = []
+    status.count = 0
+    // The engine's message about starting the command; it carries no output.
+    status.error = err instanceof Error ? err.message.slice(0, 200) : 'unknown error'
+    log($, `could not read the environment, so no values from it are masked (${status.error})`)
+  }
+  rebuildRules()
+}
+
 async function loadPatterns($: EngineInterface) {
   const path = expandHome(ctx.config.patternsFile, await $.env.get('HOME'))
   const status = ctx.stats.patterns
   status.path = path ?? ctx.config.patternsFile
+  ctx.user = null
+  status.values = 0
+  rebuildRules()
   if (path === undefined) {
     status.errors = ['HOME is unset, so ~ cannot be expanded']
     return
@@ -102,9 +146,11 @@ async function loadPatterns($: EngineInterface) {
     return
   }
   const parsed = parsePatternsFile(text)
-  ctx.rules = withUserRules(builtinRules(), parsed)
+  ctx.user = parsed
+  rebuildRules()
   status.state = parsed.errors.length === 0 ? 'loaded' : 'error'
   status.count = parsed.patterns.length
+  status.values = parsed.values.length
   status.errors = parsed.errors
   if (parsed.errors.length > 0) log($, patternsLine(status))
 }
@@ -207,6 +253,7 @@ export const register: Register = (on, options) => {
       description: 'Show or set secret masking for this session, or run its self-test',
       argumentHint: '[on|off|status|test]',
     })
+    await loadEnv($)
     await loadPatterns($)
     return next(e)
   })
