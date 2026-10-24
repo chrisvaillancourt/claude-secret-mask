@@ -128,7 +128,10 @@ export function selfTest(rules: Rules, config: Config): { isPassing: boolean; te
   let misses = 0
 
   for (const c of CANARIES) {
-    const out = maskText(c.line, vault, rules, mint)
+    // A fresh vault per canary: several share a value, and a value the vault
+    // already holds keeps its first kind.
+    maskText(c.line, vault, rules, mint)
+    const out = maskText(c.line, newVault(), rules, mint)
     const ok = !out.text.includes(c.value) && out.text.includes(`__SECRET_${c.kind}_`)
     if (!ok) misses++
     lines.push(`  ${ok ? 'ok  ' : 'MISS'} ${c.kind}${ok ? '' : ' NOT masked'}`)

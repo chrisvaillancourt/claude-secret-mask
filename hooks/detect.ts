@@ -1,8 +1,11 @@
 // Pure detection: no `$`, no I/O. The built-in patterns, the user's patterns
 // file, the allow-list, and findSecrets, which answers non-overlapping spans.
 
-/** One way to recognise a secret. `group` masks only that capture group. */
-export type Rule = { kind: string; re: RegExp; group?: number }
+/**
+ * One way to recognise a secret. `group` masks only that capture group; a
+ * list masks the first of them that matched (alternative value forms).
+ */
+export type Rule = { kind: string; re: RegExp; group?: number | readonly number[] }
 
 export type Rules = {
   patterns: readonly Rule[]
@@ -19,10 +22,10 @@ export type ParsedPatterns = { patterns: Rule[]; allow: string[]; allowPatterns:
 
 /** Names whose value is treated as secret in `NAME=value` and `"name": "value"`. */
 const SECRET_NAME =
-  '[A-Za-z][A-Za-z0-9_.-]*?(?:secret|token|passw(?:or)?d|passphrase|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credentials?|auth[_-]?key|signing[_-]?key)[A-Za-z0-9_.-]*'
+  '(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]*?(?:secret|token|passw(?:or)?d|passphrase|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credentials?|auth[_-]?key|signing[_-]?key)[A-Za-z0-9_.-]*'
 
 /** The minimum length of an assigned value before it counts as a secret. */
-export const MIN_ASSIGNED_LENGTH = 12
+export const MIN_ASSIGNED_LENGTH = 8
 
 // Order matters only for ties: on the same span, the earlier rule's kind wins,
 // so a known format beats the generic assignment rule.
@@ -31,7 +34,8 @@ const BUILTIN: readonly Rule[] = [
     kind: 'PRIVATE_KEY',
     re: /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/g,
   },
-  { kind: 'AWS_KEY_ID', re: /\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b/g },
+  // Lookarounds, not \b: a key glued to `_` or a letter is still a key.
+  { kind: 'AWS_KEY_ID', re: /(?<![A-Z0-9])(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}(?![A-Z0-9])/g },
   { kind: 'GITHUB_TOKEN', re: /\b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{50,255})\b/g },
   { kind: 'GITLAB_TOKEN', re: /\bglpat-[A-Za-z0-9_-]{20,}/g },
   { kind: 'SLACK_TOKEN', re: /\bxox[abposr]-[A-Za-z0-9-]{10,}/g },
@@ -43,24 +47,28 @@ const BUILTIN: readonly Rule[] = [
   { kind: 'NPM_TOKEN', re: /\bnpm_[A-Za-z0-9]{36}\b/g },
   { kind: 'HF_TOKEN', re: /\bhf_[A-Za-z0-9]{34,}\b/g },
   { kind: 'JWT', re: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
-  { kind: 'BEARER_TOKEN', re: /\b[Bb]earer\s+([A-Za-z0-9._~+/-]{16,}=*)/g, group: 1 },
+  { kind: 'BEARER_TOKEN', re: /\bbearer\s+([A-Za-z0-9._~+/-]{16,}=*)/gi, group: 1 },
   { kind: 'URL_PASSWORD', re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@'"]+:([^\s@/'"]{6,})@/gi, group: 1 },
   {
+    // NAME=value, NAME: value, "name": "value". A quoted value is taken whole
+    // (spaces and commas included); an unquoted one runs to whitespace or , ;
     kind: 'SECRET_VALUE',
-    re: new RegExp(`(?<![A-Za-z0-9_])${SECRET_NAME}["']?\\s*[:=]\\s*(["']?)([^\\s"'\`,;]{${MIN_ASSIGNED_LENGTH},})\\1`, 'gi'),
-    group: 2,
+    re: new RegExp(
+      `${SECRET_NAME}["']?\\s*[:=]\\s*(?:"((?:[^"\\\\\\n]|\\\\.){${MIN_ASSIGNED_LENGTH},})"|'([^'\\n]{${MIN_ASSIGNED_LENGTH},})'|([^\\s"'\`,;]{${MIN_ASSIGNED_LENGTH},}))`,
+      'gi',
+    ),
+    group: [1, 2, 3],
   },
 ]
 
-/** An assigned value that is a reference, a path, a URL or filler, not a secret. */
-function looksLikeReference(value: string): boolean {
-  if (/^[$<{%~/]|^\.\.?\//.test(value)) return true
-  if (value.includes('://')) return true
-  if (/^(.)\1+$/.test(value)) return true
-  if (/^(?:true|false|null|none|undefined)$/i.test(value)) return true
-  // A value of one character class (all lowercase letters, say) is usually a word.
-  const classes = [/[a-z]/, /[A-Z]/, /[0-9]/].filter(c => c.test(value)).length
-  return classes < 2
+/**
+ * An assigned value that stands for a secret rather than being one: a shell
+ * or template reference (`$VAR`, `${VAR}`, `{{ .x }}`), an `<angle-bracket>`
+ * placeholder, or filler of one repeated character (`********`). Nothing else
+ * is excluded: all-lowercase, numeric, paths and URLs are masked.
+ */
+export function looksLikeReference(value: string): boolean {
+  return /^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(value) || /^\{\{.*\}\}$/s.test(value) || /^<[^<>]*>$/.test(value) || /^(.)\1+$/.test(value)
 }
 
 export function builtinRules(): Rules {
@@ -167,7 +175,8 @@ export function candidates(text: string, rules: Rules): (Span & { rank: number }
   const found: (Span & { rank: number })[] = []
   rules.patterns.forEach((rule, rank) => {
     for (const m of text.matchAll(withIndices(rule.re))) {
-      const g = rule.group ?? 0
+      const groups = rule.group === undefined ? [0] : typeof rule.group === 'number' ? [rule.group] : rule.group
+      const g = groups.find(i => m[i] !== undefined) ?? groups[0]!
       const value = m[g]
       const at = m.indices?.[g]
       if (value === undefined || value === '' || at === undefined) continue

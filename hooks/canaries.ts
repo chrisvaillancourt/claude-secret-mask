@@ -43,6 +43,18 @@ export const CANARIES: readonly Canary[] = [
   { kind: 'BEARER_TOKEN', value: `${F}${F}0000`, line: `Authorization: Bearer ${F}${F}0000` },
   { kind: 'URL_PASSWORD', value: 'FAKEpass0000', line: 'DATABASE=postgres://app:FAKEpass0000@db.example.com:5432/app' },
   { kind: 'SECRET_VALUE', value: `${F}${F}00`, line: `{\n  "client_secret":\n    "${F}${F}00"\n}` },
+  // The assignment forms the README names, and the boundaries of the rule.
+  { kind: 'SECRET_VALUE', value: 'FAKEfake0000example', line: 'password: FAKEfake0000example' },
+  { kind: 'SECRET_VALUE', value: 'FAKEfake0000example', line: 'token=FAKEfake0000example' },
+  { kind: 'SECRET_VALUE', value: 'FAKEfake0000example', line: '{"api_key":"FAKEfake0000example"}' },
+  { kind: 'SECRET_VALUE', value: 'FAKEfake0000example', line: '"api_token": "FAKEfake0000example",' },
+  { kind: 'SECRET_VALUE', value: 'FAKE password 0000', line: 'DB_PASSWORD="FAKE password 0000"' },
+  { kind: 'SECRET_VALUE', value: 'FAKEfake,0000example', line: "DB_PASSWORD='FAKEfake,0000example'" },
+  { kind: 'SECRET_VALUE', value: 'fakeexamplepassword', line: 'DB_PASSWORD=fakeexamplepassword' },
+  { kind: 'SECRET_VALUE', value: '0000123400001234', line: 'DB_PASSWORD=0000123400001234' },
+  { kind: 'SECRET_VALUE', value: 'fakepass', line: 'export PGPASSWORD=fakepass' },
+  { kind: 'BEARER_TOKEN', value: 'FAKEfake0000example', line: 'authorization: bEaReR FAKEfake0000example' },
+  { kind: 'AWS_KEY_ID', value: 'AKIAFAKEFAKEFAKE0000', line: 'key_AKIAFAKEFAKEFAKE0000_suffix' },
 ]
 
 /** Text that looks close to a secret and must be left alone. */
@@ -50,7 +62,10 @@ export const NEAR_MISSES: readonly string[] = [
   'AKIAFAKEFAKEFAKE000 is one character short',
   'token_expiry_seconds=3600',
   'password=${DB_PASSWORD}',
-  'GITHUB_TOKEN_PATH=/home/someone/.config/token',
+  'api_key=${API_KEY}',
+  'token: $GITHUB_TOKEN',
+  'password: "{{ .Values.dbPassword }}"',
+  'token_type="bearer"',
   'ghp_tooShort0000',
   'the token is refreshed every hour',
   'SECRET_KEY=************************',
