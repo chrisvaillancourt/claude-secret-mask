@@ -245,8 +245,17 @@ function yamlFinds(text: string, out: Found[]) {
   }
 }
 
-/** One unquoted shell word, from the text's lastIndex. */
-const SHELL_WORD = /[^\s;&|<>()'"`]+/y
+/**
+ * One unquoted shell word, from the text's lastIndex: a backslash escapes
+ * any next character, a space or newline included (R6-1: `printf '%q'`
+ * writes `FAKE\ space0000` for one argument).
+ */
+const SHELL_WORD = /(?:[^\s;&|<>()'"`\\]|\\[\s\S])+/y
+
+/** What the shell makes of backslashes: `\<newline>` joins lines; `\x` is x (in double quotes, only for `"`, `\`, `$` and backtick). */
+function shellDecode(raw: string, isDoubleQuoted: boolean): string {
+  return raw.replace(isDoubleQuoted ? /\\(\n|["\\$`])/g : /\\([\s\S])/g, (_, c: string) => (c === '\n' ? '' : c))
+}
 
 /**
  * A flag's value at `text[at]`, as a shell reads it: `"double"` quoted with
@@ -269,7 +278,7 @@ function cliValues(text: string, at: number, isSpaced: boolean, out: Found[]): n
     }
     const raw = close === -1 ? text.slice(at + 1, Math.min(i, text.length)).trimEnd() : text.slice(at + 1, close)
     out.push({ start: at + 1, end: at + 1 + raw.length, value: raw })
-    if (q === '"' && raw.includes('\\')) out.push({ start: at + 1, end: at + 1 + raw.length, value: raw.replace(/\\(["\\$`])/g, '$1') })
+    if (q === '"' && raw.includes('\\')) out.push({ start: at + 1, end: at + 1 + raw.length, value: shellDecode(raw, true) })
     return close === -1 ? at + 1 + raw.length : close + 1
   }
   SHELL_WORD.lastIndex = at
@@ -277,6 +286,7 @@ function cliValues(text: string, at: number, isSpaced: boolean, out: Found[]): n
   // `--flag --other`: the next word is a flag, not this one's value.
   if (word === undefined || (isSpaced && word.startsWith('-'))) return -1
   out.push({ start: at, end: at + word.length, value: word })
+  if (word.includes('\\')) out.push({ start: at, end: at + word.length, value: shellDecode(word, false) })
   return at + word.length
 }
 

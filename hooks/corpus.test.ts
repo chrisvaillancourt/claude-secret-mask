@@ -113,6 +113,10 @@ export const CORPUS: readonly Row[] = [
   { format: 'cli', name: 'R5-2: an escaped quote before the minimum length', input: 'tool --password="FAK\\"E0000x"\nbare FAK"E0000x', mask: ['FAK\\"E0000x', 'FAK"E0000x'] },
   { format: 'cli', name: 'R5-2: an escaped quote after the minimum length', input: 'tool --password="FAKElong0000\\"tail0000"', mask: ['FAKElong0000\\"tail0000'] },
   { format: 'cli', name: 'R5-2: an escaped quote in the space form', input: "tool --token \"FAKE\\\"sp0000\" --next 'single quoted'", mask: ['FAKE\\"sp0000'] },
+  { format: 'cli', name: 'R6-1: an escaped space in an unquoted value (printf %q)', input: 'tool --password=FAKE\\ space0000\nbare FAKE space0000', mask: ['FAKE\\ space0000', 'FAKE space0000'] },
+  { format: 'cli', name: 'R6-1: an escaped space after a long prefix', input: 'tool --token=FAKElongprefix0000\\ tail0000\nbare FAKElongprefix0000 tail0000', mask: ['FAKElongprefix0000\\ tail0000', 'FAKElongprefix0000 tail0000'] },
+  { format: 'cli', name: 'R6-1: an escaped space in the space form, then the next flag', input: 'tool --api-key FAKE\\ sp0000x --verbose', mask: ['FAKE\\ sp0000x'] },
+  { format: 'cli', name: 'R6-1: a backslash-newline inside double quotes', input: 'tool --password="FAKE\\\ncontinued0000"\nbare FAKEcontinued0000', mask: ['FAKE\\\ncontinued0000', 'FAKEcontinued0000'] },
   { format: 'cli', name: 'negative: flag values that are not secrets', input: 'tool --token-file /path/to/token --password-stdin --no-auth somewhere/long\ntool --password --verbose', mask: [] },
 
   // Vendor formats
