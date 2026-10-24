@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { CANARIES } from './canaries'
 import { builtinRules } from './detect'
-import { INITIAL, configFrom, expandHome, isActive, isToolResultsFile, parseArgs, restoreFieldsFor, selfTest, statusText, withheld } from './policy'
+import { INITIAL, configFrom, expandHome, isActive, isSessionToolResult, parseArgs, restoreFieldsFor, selfTest, statusText, withheld } from './policy'
 
 describe('policy', () => {
   test('parseArgs reads on, off, status, test and rejects the rest', async () => {
@@ -44,11 +44,14 @@ describe('policy', () => {
     for (const t of ['Agent', 'SendMessage', 'Read', 'WebFetch', 'TaskCreate']) expect(restoreFieldsFor(t, on)).toEqual([])
   })
 
-  test('isToolResultsFile accepts only a session tool-results file', async () => {
-    expect(isToolResultsFile('/h/.claude/projects/-x/abc-123/tool-results/b1.txt')).toBe(true)
-    expect(isToolResultsFile('/etc/passwd')).toBe(false)
-    expect(isToolResultsFile('/h/.claude/projects/-x/abc/tool-results/../../../x')).toBe(false)
-    expect(isToolResultsFile('/h/project/tool-results/b1.txt')).toBe(false)
+  test('isSessionToolResult accepts only a file directly in this session\'s tool-results folder', async () => {
+    const root = '/h/.claude/projects'
+    expect(isSessionToolResult('/h/.claude/projects/-x/s1/tool-results/b1.txt', root, 's1')).toBe(true)
+    expect(isSessionToolResult('/h/.claude/projects/-x/s2/tool-results/b1.txt', root, 's1')).toBe(false)
+    expect(isSessionToolResult('/tmp/a/projects/-x/s1/tool-results/b1.txt', root, 's1')).toBe(false)
+    expect(isSessionToolResult('/h/.claude/projects/-x/s1/tool-results/sub/b1.txt', root, 's1')).toBe(false)
+    expect(isSessionToolResult('/h/.claude/projects-evil/-x/s1/tool-results/b1.txt', root, 's1')).toBe(false)
+    expect(isSessionToolResult('/etc/passwd', root, 's1')).toBe(false)
   })
 
   test('expandHome expands a leading ~ only', async () => {

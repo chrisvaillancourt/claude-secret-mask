@@ -9,7 +9,7 @@ import {
   configFrom,
   expandHome,
   isActive,
-  isToolResultsFile,
+  isSessionToolResult,
   parseArgs,
   patternsLine,
   restoreFieldsFor,
@@ -106,24 +106,45 @@ async function loadPatterns($: EngineInterface) {
 
 /**
  * Output too large to keep inline is saved by core to a tool-results file
- * before any hook sees it; the result names it. Mask that file in place.
+ * before any hook sees it; the result names it. Mask that file in place, but
+ * only where its resolved path is a file directly in this session's own
+ * tool-results folder under the resolved projects root. Anything else is
+ * refused (a link out of the folder, another session's, a forged path).
  */
 async function maskPersisted($: EngineInterface, result: unknown) {
   if (typeof result !== 'object' || result === null) return
   const r = result as Record<string, unknown>
   for (const key of ['persistedOutputPath', 'rawOutputPath']) {
     const path = r[key]
-    if (typeof path !== 'string' || !isToolResultsFile(path)) continue
+    if (typeof path !== 'string') continue
     try {
-      const text = await $.fs.read(path)
+      const real = await sessionToolResult($, path)
+      if (real === undefined) {
+        log($, 'refused to rewrite a saved tool output outside this session\'s tool-results folder; it may hold secrets')
+        continue
+      }
+      const text = await $.fs.read(real)
       const out = maskText(text, ctx.vault, ctx.rules, mint)
       if (out.count === 0) continue
       tally(out)
-      await $.fs.write(path, out.text)
+      await $.fs.write(real, out.text)
     } catch (err) {
       log($, `could not mask a saved tool output (${err instanceof Error ? err.name : 'error'}); it may hold secrets`)
     }
   }
+}
+
+/** The resolved path of a file in this session's tool-results folder, or undefined. */
+async function sessionToolResult($: EngineInterface, path: string): Promise<string | undefined> {
+  const configured = await $.env.get('CLAUDE_CONFIG_DIR')
+  const home = await $.env.get('HOME')
+  const config = configured ?? (home === undefined ? undefined : `${home}/.claude`)
+  if (config === undefined) return undefined
+  const root = await $.fs.stat(`${config.replace(/\/+$/, '')}/projects`, { resolve: true }).catch(() => undefined)
+  const file = await $.fs.stat(path, { resolve: true }).catch(() => undefined)
+  if (root?.realPath === undefined || file?.realPath === undefined || file.kind !== 'file') return undefined
+  const sessionId = await $.session.id()
+  return isSessionToolResult(file.realPath, root.realPath, sessionId) ? file.realPath : undefined
 }
 
 function maskString(text: string): string {

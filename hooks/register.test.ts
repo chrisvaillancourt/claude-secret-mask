@@ -8,10 +8,20 @@ const KEY = 'AKIAFAKEFAKEFAKE0000'
 const PH = /__SECRET_AWS_KEY_ID_[0-9A-F]{8}__/
 
 /** The engine beneath the plugin. `ran` records each tool input that reached core. */
-const PERSISTED = '/home/t/.claude/projects/-x/0f0f0f0f-0000-4000-8000-000000000000/tool-results/b1.txt'
+const SID = '0f0f0f0f-0000-4000-8000-000000000000'
+const PERSISTED = `/home/t/.claude/projects/-x/${SID}/tool-results/b1.txt`
 
 const world = (on: On, files: Record<string, string> = {}) => {
   const written: Record<string, string> = {}
+  /** Symbolic links: a path and where it lands. */
+  const links: Record<string, string> = {}
+  on('session.id', () => ({ value: SID }))
+  on('fs.stat', ($, e) => {
+    const real = links[e.path] ?? e.path
+    const isDir = real === '/home/t/.claude/projects'
+    if (!isDir && files[real] === undefined) return { deny: `ENOENT: no such file, stat '${e.path}'` }
+    return { value: { kind: isDir ? 'dir' : 'file', size: 1, mtimeMs: 0, isLink: e.path in links, ...(e.resolve ? { realPath: real } : {}) } }
+  })
   on('fs.write', ($, e) => {
     written[e.path] = e.text
     files[e.path] = e.text
@@ -20,14 +30,14 @@ const world = (on: On, files: Record<string, string> = {}) => {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('fs.read', ($, e) => {
-    const text = files[e.path]
+    const text = files[links[e.path] ?? e.path]
     return text === undefined ? { deny: `ENOENT: no such file, open '${e.path}'` } : { value: text }
   })
   mock.env(on, { HOME: '/home/t' })
   const session = mock.session(on)
   const ran: Record<string, unknown>[] = []
   let errorNext = false
-  let persistNext = false
+  let persistNext: string | null = null
   on('tool.call', ($, e) => {
     ran.push({ ...e })
     const echoed = typeof (e as any).command === 'string' ? `ran: ${(e as any).command}` : 'ok'
@@ -35,10 +45,11 @@ const world = (on: On, files: Record<string, string> = {}) => {
       errorNext = false
       return { result: `Error: ${echoed}`, text: echoed, isError: true as const, ref: 2 }
     }
-    if (persistNext) {
-      persistNext = false
-      files[PERSISTED] = `lots of output\n${echoed}\n`
-      return { result: { stdout: 'lots of output', stderr: '', interrupted: false, persistedOutputPath: PERSISTED }, text: 'lots', ref: 3 }
+    if (persistNext !== null) {
+      const path = persistNext
+      persistNext = null
+      files[links[path] ?? path] = `lots of output\n${echoed}\n`
+      return { result: { stdout: 'lots of output', stderr: '', interrupted: false, persistedOutputPath: path }, text: 'lots', ref: 3 }
     }
     return { result: { stdout: echoed, stderr: '', interrupted: false }, text: echoed, ref: 1 }
   })
@@ -46,7 +57,7 @@ const world = (on: On, files: Record<string, string> = {}) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('prompt.context', ($, e) => ({ blocks: e.blocks }))
   on('prompt.attachment', ($, e) => ({ text: e.text }))
-  return { session, ran, written, errorNext: () => (errorNext = true), persistNext: () => (persistNext = true) }
+  return { session, ran, written, errorNext: () => (errorNext = true), persistNext: (path = PERSISTED) => (persistNext = path), links, files }
 }
 
 const start = ($: any) => $.session.start({ cwd: '/x', surface: 'terminal', isInteractive: true })
@@ -207,6 +218,22 @@ describe('restoring tool input', () => {
     const X = 'FAKErepeated0000'
     const r: any = await $.tool.call({ tool: 'Bash', command: `printf 'echoed=${X}\\nOTHER_SECRET=${X}\\n'` })
     expect(JSON.stringify(r.result).includes(X)).toBe(false)
+  })
+
+  test('a saved output outside this session\'s tool-results folder is never rewritten', async ($, on) => {
+    const w = world(on)
+    await start($)
+    // A symbolic link in the right folder that lands elsewhere.
+    const link = `/home/t/.claude/projects/-x/${SID}/tool-results/link.txt`
+    w.links[link] = '/home/t/creds.env'
+    w.persistNext(link)
+    await $.tool.call({ tool: 'Bash', command: `echo ${KEY}` })
+    // The right suffix under another root, and another session's folder.
+    w.persistNext(`/tmp/elsewhere/projects/-x/${SID}/tool-results/b2.txt`)
+    await $.tool.call({ tool: 'Bash', command: `echo ${KEY}` })
+    w.persistNext('/home/t/.claude/projects/-x/another-session/tool-results/b3.txt')
+    await $.tool.call({ tool: 'Bash', command: `echo ${KEY}` })
+    expect(Object.keys(w.written)).toEqual([])
   })
 
   test('a result with nothing to mask is passed through as core made it', async ($, on) => {

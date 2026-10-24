@@ -12,7 +12,7 @@ This is masking on the paths the mod API lets a plugin rewrite, not a vault or a
   - what the model reads for each injected attachment (`prompt.attachment`): a file you mention with `@`, reminders, a settings hook's context. Checked live: the model quoted an `@file` line as a placeholder.
   - the prompt as you submit it (`prompt.submit`), so the queued record matches.
   - the tool's structured result (`tool.call`), which the screen draws and the transcript stores beside the model's copy. A failed tool's result that holds a secret is withheld and replaced by its masked text, so the stored error record is masked too.
-  - the file Claude Code saves a large Bash output to (`tool-results/` in the session folder): the mod masks that file in place after the tool runs.
+  - the file Claude Code saves a large Bash output to (`tool-results/` in the session folder): the mod masks that file in place after the tool runs. It rewrites only a file whose resolved path lies directly in this session's own `tool-results` folder; anything else (a symbolic link out of it, another session's folder) is left alone and logged.
   - messages sent to other agents or sessions (`session.send`).
   - the first message's context blocks (`prompt.context`: CLAUDE.md and the like), only when a secret is found there.
 - **Placeholders** are stable per secret for as long as the mod stays loaded, are made of ASCII word characters (inert if they ever reach a shell unrestored), and carry the kind of secret so the model knows what it holds.

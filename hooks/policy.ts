@@ -54,9 +54,21 @@ export function unknownReason(tokens: readonly string[]): string {
   )
 }
 
-/** A file core saved a large tool output to: `<config>/projects/<dir>/<session>/tool-results/<file>`. */
-export function isToolResultsFile(path: string): boolean {
-  return !path.split('/').includes('..') && /\/projects\/[^/]+\/[^/]+\/tool-results\/[^/]+$/.test(path)
+/**
+ * Whether a resolved path is a file directly in this session's tool-results
+ * folder: `<projects root>/<project dir>/<session id>/tool-results/<file>`.
+ * Both paths must already be resolved (`$.fs.stat(path, { resolve: true })`).
+ */
+export function isSessionToolResult(realPath: string, realProjectsRoot: string, sessionId: string): boolean {
+  const root = realProjectsRoot.replace(/\/+$/, '')
+  if (root === '' || !realPath.startsWith(`${root}/`)) return false
+  const rest = realPath.slice(root.length + 1).split('/')
+  return (
+    rest.length === 4 &&
+    rest.every(p => p !== '' && p !== '.' && p !== '..') &&
+    rest[1] === sessionId &&
+    rest[2] === 'tool-results'
+  )
 }
 
 export function expandHome(path: string, home: string | undefined): string | undefined {
