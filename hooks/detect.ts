@@ -356,47 +356,55 @@ export class JsonScanIncomplete extends Error {
 /**
  * JSON: the whole text, or else each document that starts at one of a line's
  * first few `{` or `[` and runs to its matching bracket, where `JSON.parse`
- * accepts it. A document that starts a line (after indentation: NDJSON, a
- * pretty-printed body after HTTP headers) may run over many lines; one that
- * starts mid-line (a log line's tail) must close on its line, so header text
- * like `X-Trace: [[[[` costs only its own line. Line-start scans share a
- * budget of JSON_SCAN_PASSES passes over the text; if it runs out before
- * every line-start document was scanned, this throws JsonScanIncomplete and
- * the unit is withheld: an unfinished scan is never taken as coverage.
+ * accepts it. A document may span many lines when its opener starts the line
+ * (after indentation: NDJSON, a pretty-printed body after HTTP headers) or
+ * ends it (R6-2: `payload: {` from a pretty-printed log); any other opener's
+ * document must close on its line, so header text like `X-Trace: [[[[`
+ * costs its own line and one attempt. Multi-line scans share a budget of
+ * JSON_SCAN_PASSES passes over the text; if it runs out before every such
+ * document was scanned, this throws JsonScanIncomplete and the unit is
+ * withheld: an unfinished scan is never taken as coverage.
  */
 function jsonFinds(text: string, out: Found[], depth: number) {
   const trimmed = text.trim()
   if (/^[{[]/.test(trimmed) && parses(trimmed)) return walkJson(trimmed, text.indexOf(trimmed), out, depth)
   let budget = JSON_SCAN_PASSES * text.length + 1024
+  /** Scans a document from `from`; answers where it ends, or -1. */
+  const tryAt = (from: number, lineEnd: number, isMultiLine: boolean): number => {
+    let close: number
+    if (isMultiLine) {
+      if (budget <= 0) throw new JsonScanIncomplete()
+      close = balancedEnd(text, from, from + budget)
+      if (close === -1 && from + budget < text.length) throw new JsonScanIncomplete()
+      budget -= (close === -1 ? text.length : close) - from
+    } else close = balancedEnd(text, from, lineEnd)
+    if (close === -1) return -1
+    const doc = text.slice(from, close)
+    if (!parses(doc)) return -1
+    walkJson(doc, from, out, depth)
+    return close
+  }
   for (let lineAt = 0; lineAt < text.length; ) {
     const nl = text.indexOf('\n', lineAt)
     const lineEnd = nl === -1 ? text.length : nl
     let next = lineEnd + 1
-    let from = lineAt
     const indent = /^[ \t]*/.exec(text.slice(lineAt, Math.min(lineEnd, lineAt + 256)))![0].length
-    for (let tries = 0; tries < MAX_OPENS_PER_LINE; tries++) {
+    let lastOpen = lineEnd - 1
+    while (lastOpen > lineAt && (text[lastOpen] === ' ' || text[lastOpen] === '\t' || text[lastOpen] === '\r')) lastOpen--
+    if (text[lastOpen] !== '{' && text[lastOpen] !== '[') lastOpen = -1
+    let found = -1
+    let from = lineAt
+    for (let tries = 0; tries < MAX_OPENS_PER_LINE && found === -1; tries++) {
       const rel = text.slice(from, lineEnd).search(/[{[]/)
       if (rel === -1) break
       from += rel
-      const isLineStart = from === lineAt + indent
-      let close: number
-      if (isLineStart) {
-        if (budget <= 0) throw new JsonScanIncomplete()
-        close = balancedEnd(text, from, from + budget)
-        const scanned = (close === -1 ? text.length : close) - from
-        if (close === -1 && from + budget < text.length) throw new JsonScanIncomplete()
-        budget -= scanned
-      } else close = balancedEnd(text, from, lineEnd)
-      if (close !== -1) {
-        const doc = text.slice(from, close)
-        if (parses(doc)) {
-          walkJson(doc, from, out, depth)
-          next = Math.max(next, close)
-          break
-        }
-      }
+      // A line-ending opener is tried once, below, across lines.
+      if (from === lastOpen && from !== lineAt + indent) break
+      found = tryAt(from, lineEnd, from === lineAt + indent)
       from++
     }
+    if (found === -1 && lastOpen !== -1 && lastOpen !== lineAt + indent) found = tryAt(lastOpen, lineEnd, true)
+    if (found !== -1) next = Math.max(next, found)
     lineAt = next
   }
 }
