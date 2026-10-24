@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { CANARIES } from './canaries'
+import { WITHHELD } from './policy'
 
 const COMMAND = { origin: { kind: 'composer' as const }, presentation: { isFullscreen: false, columns: 120 } }
 const KEY = 'AKIAFAKEFAKEFAKE0000'
@@ -22,7 +23,12 @@ const world = (on: On, files: Record<string, string> = {}) => {
     if (!isDir && files[real] === undefined) return { deny: `ENOENT: no such file, stat '${e.path}'` }
     return { value: { kind: isDir ? 'dir' : 'file', size: 1, mtimeMs: 0, isLink: e.path in links, ...(e.resolve ? { realPath: real } : {}) } }
   })
+  /** Writes refused outright, and the longest text a write takes (the engine's is 4 MiB). */
+  const unwritable = new Set<string>()
+  let writeLimit = Infinity
   on('fs.write', ($, e) => {
+    if (unwritable.has(e.path)) return { deny: `EACCES: permission denied, open '${e.path}'` }
+    if (e.text.length > writeLimit) return { deny: 'refused: the text is over the 4194304-byte limit' }
     written[e.path] = e.text
     files[e.path] = e.text
     return { value: undefined }
@@ -30,8 +36,11 @@ const world = (on: On, files: Record<string, string> = {}) => {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   const unreadable = new Set<string>()
+  /** Files the engine refuses to read for size. */
+  const oversize = new Set<string>()
   on('fs.read', ($, e) => {
     if (unreadable.has(e.path)) return { deny: `EACCES: permission denied, open '${e.path}'` }
+    if (oversize.has(e.path)) return { deny: 'refused: the file is over the 4194304-byte limit' }
     const text = files[links[e.path] ?? e.path]
     return text === undefined ? { deny: `ENOENT: no such file, open '${e.path}'` } : { value: text }
   })
@@ -66,6 +75,9 @@ const world = (on: On, files: Record<string, string> = {}) => {
   })
   return {
     unreadable,
+    oversize,
+    unwritable,
+    limitWrites: (n: number) => (writeLimit = n),
     mentioned, session, ran, written, errorNext: () => (errorNext = true), persistNext: (path = PERSISTED) => (persistNext = path), links, files }
 }
 
@@ -265,6 +277,42 @@ describe('restoring tool input', () => {
     expect(w.written[PERSISTED]).toBeDefined()
     expect(w.written[PERSISTED]!.includes(KEY)).toBe(false)
     expect(w.written[PERSISTED]).toMatch(PH)
+  })
+
+  test('a saved output too large to read is replaced by the withheld marker', async ($, on) => {
+    const w = world(on)
+    await start($)
+    w.oversize.add(PERSISTED)
+    w.persistNext()
+    const r: any = await $.tool.call({ tool: 'Bash', command: `echo ${KEY}` })
+    expect(w.files[PERSISTED]).toBe(WITHHELD)
+    expect(JSON.stringify(r).includes(KEY)).toBe(false)
+  })
+
+  test('a saved output whose masked text is too large to write is replaced by the withheld marker', async ($, on) => {
+    const w = world(on)
+    await start($)
+    // Core wrote the raw file; the masked text (a placeholder is longer than the key) is over the
+    // limit, the marker under it.
+    const raw = `lots of output\nran: echo ${KEY} ${KEY}\n`
+    expect(raw.length > WITHHELD.length).toBe(true)
+    w.limitWrites(raw.length)
+    w.persistNext()
+    const r: any = await $.tool.call({ tool: 'Bash', command: `echo ${KEY} ${KEY}` })
+    expect(w.files[PERSISTED]).toBe(WITHHELD)
+    expect(r.deny).toBeUndefined()
+    expect(JSON.stringify(r).includes(KEY)).toBe(false)
+  })
+
+  test('when even the marker cannot be written, the whole result is withheld', async ($, on) => {
+    const w = world(on)
+    await start($)
+    w.oversize.add(PERSISTED)
+    w.unwritable.add(PERSISTED)
+    w.persistNext()
+    const r: any = await $.tool.call({ tool: 'Bash', command: `echo ${KEY}` })
+    expect(r.deny).toBe(WITHHELD)
+    expect(r.result).toBeUndefined()
   })
 
   test('a value found in a result is masked in every copy of the stored record', async ($, on) => {

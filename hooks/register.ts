@@ -114,6 +114,11 @@ async function loadPatterns($: EngineInterface) {
  * only where its resolved path is a file directly in this session's own
  * tool-results folder under the resolved projects root. Anything else is
  * refused (a link out of the folder, another session's, a forged path).
+ *
+ * Fail closed: a file we may rewrite but could not read, mask or write back
+ * (the engine refuses a read or write over 4 MiB, so a large file or a masked
+ * text grown past that is a real case) is replaced by the withheld marker. If
+ * even that write fails this throws, and `tool.call` withholds the result.
  */
 async function maskPersisted($: EngineInterface, result: unknown) {
   if (typeof result !== 'object' || result === null) return
@@ -121,25 +126,21 @@ async function maskPersisted($: EngineInterface, result: unknown) {
   for (const key of ['persistedOutputPath', 'rawOutputPath']) {
     const path = r[key]
     if (typeof path !== 'string') continue
+    const real = await sessionToolResult($, path)
+    if (real === undefined) {
+      log($, 'refused to rewrite a saved tool output outside this session\'s tool-results folder; it may hold secrets')
+      continue
+    }
     try {
-      const real = await sessionToolResult($, path)
-      if (real === undefined) {
-        log($, 'refused to rewrite a saved tool output outside this session\'s tool-results folder; it may hold secrets')
-        continue
-      }
       const text = await $.fs.read(real)
-      let out: ReturnType<typeof maskText>
-      try {
-        out = maskText(text, ctx.vault, ctx.rules, mint)
-      } catch {
-        await $.fs.write(real, WITHHELD)
-        continue
-      }
+      const out = maskText(text, ctx.vault, ctx.rules, mint)
       if (out.count === 0) continue
-      tally(out)
       await $.fs.write(real, out.text)
+      tally(out)
     } catch (err) {
-      log($, `could not mask a saved tool output (${err instanceof Error ? err.name : 'error'}); it may hold secrets`)
+      log($, `could not mask a saved tool output (${err instanceof Error ? err.name : 'error'}); replacing it with the withheld marker`)
+      // A rejection here propagates: the caller withholds the whole result.
+      await $.fs.write(real, WITHHELD)
     }
   }
 }
