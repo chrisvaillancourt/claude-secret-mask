@@ -108,6 +108,9 @@ export const CORPUS: readonly Row[] = [
   { format: 'cli', name: 'quoted value', input: 'tool --token "FAKE cli 0000"', mask: ['FAKE cli 0000'] },
   { format: 'cli', name: 'in a ps line', input: '  501 12345 node server.js --db-password=FAKEps0000pass', mask: ['FAKEps0000pass'] },
   { format: 'cli', name: 'ends at a shell operator', input: 'run --token=FAKEshell0000op;next', mask: ['FAKEshell0000op'] },
+  { format: 'cli', name: 'R5-2: an escaped quote before the minimum length', input: 'tool --password="FAK\\"E0000x"\nbare FAK"E0000x', mask: ['FAK\\"E0000x', 'FAK"E0000x'] },
+  { format: 'cli', name: 'R5-2: an escaped quote after the minimum length', input: 'tool --password="FAKElong0000\\"tail0000"', mask: ['FAKElong0000\\"tail0000'] },
+  { format: 'cli', name: 'R5-2: an escaped quote in the space form', input: "tool --token \"FAKE\\\"sp0000\" --next 'single quoted'", mask: ['FAKE\\"sp0000'] },
   { format: 'cli', name: 'negative: flag values that are not secrets', input: 'tool --token-file /path/to/token --password-stdin --no-auth somewhere/long\ntool --password --verbose', mask: [] },
 
   // Vendor formats

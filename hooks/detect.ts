@@ -154,8 +154,8 @@ const KEY_EQUALS = new RegExp(
  */
 const YAML_KEY = new RegExp(`${LEAD}(?:"([^"\\n]*)"|'([^'\\n]*)'|(${NAME}))[ \\t]*:([ \\t]*)([^\\n]*)$`, 'gmd')
 
-/** `--name=value` or `--name value`, anywhere. Group 1 the name, 2 the separator, 3-5 the value. */
-const CLI_FLAG = /(?<![A-Za-z0-9_-])--(?!no-)([A-Za-z0-9][A-Za-z0-9_.-]*)(=|[ \t]+)(?:"([^"\n]*)"|'([^'\n]*)'|([^\s;&|<>()'"`]+))/dg
+/** `--name=` or `--name `, anywhere: group 1 the name, 2 the separator. The value is read by `cliValues`. */
+const CLI_FLAG = /(?<![A-Za-z0-9_-])--(?!no-)([A-Za-z0-9][A-Za-z0-9_.-]*)(=|[ \t]+)/dg
 
 /** The index of the quote closing one opened at `rest[0]`, or -1. `escapes`: a backslash escapes the next character. */
 function closingQuote(rest: string, escapes: boolean): number {
@@ -245,18 +245,49 @@ function yamlFinds(text: string, out: Found[]) {
   }
 }
 
+/** One unquoted shell word, from the text's lastIndex. */
+const SHELL_WORD = /[^\s;&|<>()'"`]+/y
+
+/**
+ * A flag's value at `text[at]`, as a shell reads it: `"double"` quoted with
+ * backslash escapes (registered as written and as the shell decodes it;
+ * R5-2: `\\"` does not end the value), `'single'` quoted with none, or one
+ * unquoted word. An unclosed quote runs to the end of the line. Answers the
+ * value's end, or -1 for a value that is another flag.
+ */
+function cliValues(text: string, at: number, isSpaced: boolean, out: Found[]): number {
+  const q = text[at]
+  if (q === '"' || q === "'") {
+    let i = at + 1
+    let close = -1
+    for (; i < text.length && text[i] !== '\n'; i++) {
+      if (q === '"' && text[i] === '\\') i++
+      else if (text[i] === q) {
+        close = i
+        break
+      }
+    }
+    const raw = close === -1 ? text.slice(at + 1, Math.min(i, text.length)).trimEnd() : text.slice(at + 1, close)
+    out.push({ start: at + 1, end: at + 1 + raw.length, value: raw })
+    if (q === '"' && raw.includes('\\')) out.push({ start: at + 1, end: at + 1 + raw.length, value: raw.replace(/\\(["\\$`])/g, '$1') })
+    return close === -1 ? at + 1 + raw.length : close + 1
+  }
+  SHELL_WORD.lastIndex = at
+  const word = SHELL_WORD.exec(text)?.[0]
+  // `--flag --other`: the next word is a flag, not this one's value.
+  if (word === undefined || (isSpaced && word.startsWith('-'))) return -1
+  out.push({ start: at, end: at + word.length, value: word })
+  return at + word.length
+}
+
 function cliFinds(text: string, out: Found[]) {
   const re = new RegExp(CLI_FLAG)
   for (let m = re.exec(text); m !== null; m = re.exec(text)) {
-    const g = m[3] !== undefined ? 3 : m[4] !== undefined ? 4 : 5
-    const value = m[g]!
-    const at = m.indices![g]![0]
-    // `--flag --other`: the next word is a flag, not this one's value.
-    if (g === 5 && m[2] !== '=' && value.startsWith('-')) {
-      re.lastIndex = at
-      continue
-    }
-    if (isSecretName(m[1]!)) out.push({ start: at, end: at + value.length, value })
+    const found: Found[] = []
+    const end = cliValues(text, m.index + m[0].length, m[2] !== '=', found)
+    if (end === -1) continue
+    re.lastIndex = end
+    if (isSecretName(m[1]!)) out.push(...found)
   }
 }
 
