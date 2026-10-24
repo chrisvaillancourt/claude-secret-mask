@@ -124,28 +124,10 @@ export const CORPUS: readonly Row[] = [
 ]
 
 /**
- * Rows the v0.1 detector fails, kept as red assertions until the per-format
- * parsers land: each must still fail, so the corpus proves the redesign.
+ * Rows a detector change is known to fail, kept as red assertions (each must
+ * still fail) until the change that fixes them lands. Empty: every row passes.
  */
-const PENDING = new Set<string>([
-  "dotenv: an unquoted value runs to the end of the line; its first word is learned too",
-  "ini: negative: a subscript in code",
-  "ini: negative: a call in code",
-  "yaml: an anchor before the value is skipped",
-  "yaml: negative: tags, aliases, block scalars, flow collections",
-  "yaml: negative: a call in an object literal",
-  "json: escaped string: as written and decoded",
-  "json: strings in an array under a secret key",
-  "json: negative: a short numeric PIN",
-  "cli: space form",
-  "cli: quoted value",
-  "vendor: Stripe webhook secret",
-  "vendor: SendGrid key",
-  "vendor: URL password, percent-encoded, then decoded bare",
-  "out-of-contract: an assignment in the middle of a line",
-  "out-of-contract: a URL query string",
-  "out-of-contract: invalid JSON gets no JSON handling",
-])
+const PENDING = new Set<string>([])
 
 const RESERVED = /__SECRET_[A-Za-z0-9_]+?_[0-9A-F]{8}__/g
 

@@ -337,7 +337,7 @@ describe('restoring tool input', () => {
     world(on)
     await start($)
     const X = 'FAKErepeated0000'
-    const r: any = await $.tool.call({ tool: 'Bash', command: `printf 'echoed=${X}\\nOTHER_SECRET=${X}\\n'` })
+    const r: any = await $.tool.call({ tool: 'Bash', command: `printf 'echoed=${X}\nOTHER_SECRET=${X}\n'` })
     expect(JSON.stringify(r.result).includes(X)).toBe(false)
   })
 

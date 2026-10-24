@@ -91,7 +91,24 @@ function segments(text: string, vault: Vault): { text: string; isOwn: boolean }[
  * Candidates come in rule order, so a known format's kind wins a shared value.
  */
 function discover(text: string, vault: Vault, rules: Rules, mint: Mint, unit: string, tally: MaskTally) {
-  for (const seg of segments(text, vault)) {
+  const segs = segments(text, vault)
+  if (segs.length === 1) {
+    for (const s of candidates(text, rules)) issue(s.value, s.kind, vault, mint, unit, tally)
+    return
+  }
+  // Issued placeholders in the text: scan it whole too (so a JSON document
+  // holding one still parses), dropping any candidate that overlaps one, and
+  // scan each stretch between them as before.
+  const own: [number, number][] = []
+  let at = 0
+  for (const seg of segs) {
+    if (seg.isOwn) own.push([at, at + seg.text.length])
+    at += seg.text.length
+  }
+  for (const s of candidates(text, rules)) {
+    if (!own.some(([a, b]) => s.start < b && a < s.end)) issue(s.value, s.kind, vault, mint, unit, tally)
+  }
+  for (const seg of segs) {
     if (seg.isOwn) continue
     for (const s of candidates(seg.text, rules)) issue(s.value, s.kind, vault, mint, unit, tally)
   }

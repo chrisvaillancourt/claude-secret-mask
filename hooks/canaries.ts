@@ -22,7 +22,7 @@ export const CANARIES: readonly Canary[] = [
     value: `${F}${F}${F}${F}${F}`,
     line: `AWS_SECRET_ACCESS_KEY=${F}${F}${F}${F}${F}`,
   },
-  { kind: 'GITHUB_TOKEN', value: `ghp_${F}${F}${F}${F}0000`, line: `token: ghp_${F}${F}${F}${F}0000 (repo scope)` },
+  { kind: 'GITHUB_TOKEN', value: `ghp_${F}${F}${F}${F}0000`, line: `using ghp_${F}${F}${F}${F}0000 (repo scope)` },
   { kind: 'GITLAB_TOKEN', value: `glpat-${F}${F}0000`, line: `glpat-${F}${F}0000` },
   { kind: 'SLACK_TOKEN', value: `xoxb-0000000000-0000000000-${F}${F}`, line: `SLACK=xoxb-0000000000-0000000000-${F}${F}` },
   {

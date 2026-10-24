@@ -150,8 +150,8 @@ describe('masking', () => {
     expect(one.text).toBe('{"password":__SECRET_SECRET_VALUE_00000001__}\nechoed=__SECRET_SECRET_VALUE_00000001__')
     const deep = maskDeep({ stdout: `{"db":{"password": ${pin}}}`, stderr: `echoed=${pin}` }, newVault(), rules, counter())
     expect(deep.value).toEqual({ stdout: '{"db":{"password": __SECRET_SECRET_VALUE_00000001__}}', stderr: 'echoed=__SECRET_SECRET_VALUE_00000001__' })
-    const list = maskText(`{"tokens":[{"api_token":${pin}]}`, newVault(), rules, counter())
-    expect(list.text).toBe('{"tokens":[{"api_token":__SECRET_SECRET_VALUE_00000001__]}')
+    const list = maskText(`{"tokens":[{"api_token":${pin}}]}`, newVault(), rules, counter())
+    expect(list.text).toBe('{"tokens":[{"api_token":__SECRET_SECRET_VALUE_00000001__}]}')
   })
 
   test('a name with a leading underscore is checked like any other', async () => {

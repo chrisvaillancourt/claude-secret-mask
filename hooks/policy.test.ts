@@ -101,7 +101,7 @@ describe('policy', () => {
   })
 
   test('the self-test fails loudly when a rule set misses canaries', async () => {
-    const out = selfTest({ patterns: [], allow: new Set(), allowPatterns: [] }, configFrom({}))
+    const out = selfTest({ values: [], patterns: [], allow: new Set(), allowPatterns: [] }, configFrom({}))
     expect(out.isPassing).toBe(false)
     expect(out.text).toContain('NOT masked')
     for (const c of CANARIES) expect(out.text.includes(c.value)).toBe(false)
