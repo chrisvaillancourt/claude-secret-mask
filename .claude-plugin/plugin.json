@@ -7,8 +7,26 @@
     "enabled": {
       "type": "boolean",
       "title": "Enabled",
-      "description": "Turn the mod on for new sessions. /secret-mask on|off overrides it for a session.",
+      "description": "Mask secrets in new sessions. /secret-mask on|off overrides it for a session.",
       "default": true
+    },
+    "restoreIntoFiles": {
+      "type": "boolean",
+      "title": "Restore into files",
+      "description": "Also restore placeholders into Write, Edit and NotebookEdit content, which writes the real secret into the file.",
+      "default": false
+    },
+    "restoreInMcp": {
+      "type": "boolean",
+      "title": "Restore into MCP arguments",
+      "description": "Also restore placeholders into MCP tool arguments.",
+      "default": false
+    },
+    "patternsFile": {
+      "type": "string",
+      "title": "Patterns file",
+      "description": "JSON file of your own patterns and allow-list, outside any repository. A leading ~ is your home directory.",
+      "default": "~/.config/secret-mask/patterns.json"
     }
   },
   "author": {
