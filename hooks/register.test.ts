@@ -236,6 +236,16 @@ describe('restoring tool input', () => {
     expect(Object.keys(w.written)).toEqual([])
   })
 
+  test('copying ordinary metrics JSON through Bash keeps it valid and unchanged', async ($, on) => {
+    world(on)
+    await start($)
+    const json = '{"token_count":12345678,"token_kind":"identifier","password_hint":"ask the administrator","request_id":"00000000-0000-4000-8000-000000000000"}'
+    const r: any = await $.tool.call({ tool: 'Bash', command: `printf '%s' '${json}'` })
+    expect(r.ref).toBe(1)
+    const out = r.result.stdout.replace(/^ran: printf '%s' '/, '').replace(/'$/, '')
+    expect(JSON.parse(out)).toEqual(JSON.parse(json))
+  })
+
   test('a result with nothing to mask is passed through as core made it', async ($, on) => {
     world(on)
     await start($)

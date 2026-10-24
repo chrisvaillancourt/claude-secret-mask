@@ -5,7 +5,13 @@
  * One way to recognise a secret. `group` masks only that capture group; a
  * list masks the first of them that matched (alternative value forms).
  */
-export type Rule = { kind: string; re: RegExp; group?: number | readonly number[] }
+export type Rule = {
+  kind: string
+  re: RegExp
+  group?: number | readonly number[]
+  /** Built-in rules only: a further check on the match (the assignment rule's name policy). */
+  accept?: (m: RegExpMatchArray, value: string) => boolean
+}
 
 export type Rules = {
   patterns: readonly Rule[]
@@ -20,9 +26,32 @@ export type Span = { start: number; end: number; value: string; kind: string }
 
 export type ParsedPatterns = { patterns: Rule[]; allow: string[]; allowPatterns: RegExp[]; errors: string[] }
 
-/** Names whose value is treated as secret in `NAME=value` and `"name": "value"`. */
-const SECRET_NAME =
-  '(?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]*?(?:secret|token|passw(?:or)?d|passphrase|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credentials?|auth[_-]?key|signing[_-]?key)[A-Za-z0-9_.-]*'
+/** An assignment's name: `NAME=`, `name:`, `"name":`, `--name=`. */
+const ASSIGNED_NAME = '(?<![A-Za-z0-9_.])([A-Za-z][A-Za-z0-9_.-]*)'
+
+/** Final name segments that make an assignment secret. */
+const SECRET_WORDS = new Set(['password', 'passwd', 'pwd', 'secret', 'token', 'key', 'apikey', 'credential', 'credentials', 'auth', 'passphrase'])
+
+/** Longer words a final segment may also end with (`PGPASSWORD`, `refreshtoken`). */
+const SECRET_SUFFIXES = ['password', 'passwd', 'secret', 'token', 'apikey', 'credential', 'credentials', 'passphrase']
+
+/**
+ * Whether an assignment's name marks its value as secret: its final segment
+ * (split on `_ . -` and camelCase) is a secret word, or ends with a long one.
+ * `DB_PASSWORD`, `api_key`, `GITHUB_TOKEN`, `clientSecret` and `PGPASSWORD`
+ * are; `token_count`, `token_kind`, `password_hint` and `GITHUB_TOKEN_PATH`
+ * are not.
+ */
+export function isSecretName(name: string): boolean {
+  const parts = name
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .split(/[_.-]+/)
+    .filter(Boolean)
+  const last = parts.at(-1)
+  if (last === undefined) return false
+  return SECRET_WORDS.has(last) || SECRET_SUFFIXES.some(w => last.endsWith(w))
+}
 
 /** The minimum length of an assigned value before it counts as a secret. */
 export const MIN_ASSIGNED_LENGTH = 8
@@ -50,14 +79,16 @@ const BUILTIN: readonly Rule[] = [
   { kind: 'BEARER_TOKEN', re: /\bbearer\s+([A-Za-z0-9._~+/-]{16,}=*)/gi, group: 1 },
   { kind: 'URL_PASSWORD', re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@'"]+:([^\s@/'"]{6,})@/gi, group: 1 },
   {
-    // NAME=value, NAME: value, "name": "value". A quoted value is taken whole
-    // (spaces and commas included); an unquoted one runs to whitespace or , ;
+    // NAME=value, NAME: value, "name": "value", where the name passes
+    // isSecretName. A quoted value is taken whole (spaces and commas
+    // included); an unquoted one runs to whitespace or , ;
     kind: 'SECRET_VALUE',
     re: new RegExp(
-      `${SECRET_NAME}["']?\\s*[:=]\\s*(?:"((?:[^"\\\\\\n]|\\\\.){${MIN_ASSIGNED_LENGTH},})"|'([^'\\n]{${MIN_ASSIGNED_LENGTH},})'|([^\\s"'\`,;]{${MIN_ASSIGNED_LENGTH},}))`,
-      'gi',
+      `${ASSIGNED_NAME}["']?\\s*[:=]\\s*(?:"((?:[^"\\\\\\n]|\\\\.){${MIN_ASSIGNED_LENGTH},})"|'([^'\\n]{${MIN_ASSIGNED_LENGTH},})'|([^\\s"'\`,;&\\\\]{${MIN_ASSIGNED_LENGTH},}))`,
+      'g',
     ),
-    group: [1, 2, 3],
+    group: [2, 3, 4],
+    accept: (m, value) => isSecretName(m[1] ?? '') && !looksLikeReference(value),
   },
 ]
 
@@ -174,14 +205,22 @@ function withIndices(re: RegExp): RegExp {
 export function candidates(text: string, rules: Rules): (Span & { rank: number })[] {
   const found: (Span & { rank: number })[] = []
   rules.patterns.forEach((rule, rank) => {
-    for (const m of text.matchAll(withIndices(rule.re))) {
+    // A manual loop, not matchAll: when `accept` refuses a match (a name that
+    // isn't secret), scanning resumes one character in, so a refused match
+    // never swallows a secret assignment inside its span.
+    const re = new RegExp(withIndices(rule.re))
+    for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+      if (m[0] === '') re.lastIndex++
       const groups = rule.group === undefined ? [0] : typeof rule.group === 'number' ? [rule.group] : rule.group
       const g = groups.find(i => m[i] !== undefined) ?? groups[0]!
       const value = m[g]
       const at = m.indices?.[g]
       if (value === undefined || value === '' || at === undefined) continue
       const start = at[0]
-      if (rule.kind === 'SECRET_VALUE' && rank < BUILTIN.length && looksLikeReference(value)) continue
+      if (rule.accept !== undefined && !rule.accept(m, value)) {
+        re.lastIndex = m.index + 1
+        continue
+      }
       if (isAllowed(value, rules)) continue
       found.push({ start, end: start + value.length, value, kind: rule.kind, rank })
     }
