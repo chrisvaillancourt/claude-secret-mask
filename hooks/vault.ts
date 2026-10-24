@@ -73,11 +73,17 @@ function segments(text: string, vault: Vault): { text: string; isOwn: boolean }[
   return out
 }
 
-/** Pass one: registers every secret the patterns find, substituting nothing. */
+/**
+ * Pass one: registers every candidate the patterns find, substituting
+ * nothing. Overlapping candidates are all registered (a URL password inside a
+ * secret assignment, a Bearer token inside a quoted one), so a bare copy of
+ * the inner one is masked too; overlaps are settled only at substitution.
+ * Candidates come in rule order, so a known format's kind wins a shared value.
+ */
 function discover(text: string, vault: Vault, rules: Rules, mint: Mint, unit: string, tally: MaskTally) {
   for (const seg of segments(text, vault)) {
     if (seg.isOwn) continue
-    for (const s of resolveOverlaps(candidates(seg.text, rules))) issue(s.value, s.kind, vault, mint, unit, tally)
+    for (const s of candidates(seg.text, rules)) issue(s.value, s.kind, vault, mint, unit, tally)
   }
 }
 

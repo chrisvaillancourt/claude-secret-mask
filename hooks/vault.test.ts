@@ -105,6 +105,17 @@ describe('masking', () => {
     expect(out.text.includes('AKIAFAKEFAKEFAKE0000')).toBe(false)
   })
 
+  test('a secret nested inside another detected value is registered and masked bare elsewhere', async () => {
+    const pass = 'FAKEpass0000'
+    const one = maskText(`DATABASE_SECRET=postgres://app:${pass}@db.example/db\nechoed=${pass}`, newVault(), rules, counter())
+    expect(one.text.includes(pass)).toBe(false)
+    const deep = maskDeep({ stdout: `DATABASE_SECRET=postgres://app:${pass}@db.example/db`, stderr: `echoed=${pass}` }, newVault(), rules, counter())
+    expect(JSON.stringify(deep.value).includes(pass)).toBe(false)
+    const bearer = 'FAKEBearer0000example'
+    const b = maskText(`API_TOKEN="Bearer ${bearer}"\nechoed=${bearer}`, newVault(), rules, counter())
+    expect(b.text.includes(bearer)).toBe(false)
+  })
+
   test('a newly found value is masked everywhere in the unit: before, after, across fields and blocks', async () => {
     const X = 'FAKErepeated0000'
     const one = maskText(`echoed=${X}\nOTHER_SECRET=${X}\nagain ${X}`, newVault(), rules, counter())
