@@ -410,13 +410,41 @@ function walkJson(src: string, base: number, out: Found[], depth: number) {
   }
 }
 
-/** A JSON string's decoded text read with the parsers; where it was escaped, by value only. */
+/**
+ * For a JSON string's source text (between the quotes), where each decoded
+ * code unit starts in it: `at[d]` is the source offset of decoded unit `d`,
+ * and `at[decoded length]` the source's length.
+ */
+function sourceOffsets(raw: string): number[] {
+  const at: number[] = []
+  for (let i = 0; i < raw.length; ) {
+    at.push(i)
+    i += raw[i] !== '\\' ? 1 : raw[i + 1] === 'u' ? 6 : 2
+  }
+  at.push(raw.length)
+  return at
+}
+
+/**
+ * A JSON string's decoded text read with the parsers. A value found there is
+ * registered as found and, where the string was escaped, also in its written
+ * form: the source text its decoded span came from (R5-1:
+ * `"PASSWORD=FAKE\\\\path"` holds `FAKE\\\\path` in the text, not `FAKE\\path`).
+ */
 function stringFinds(decoded: string, raw: string, start: number, out: Found[], depth: number) {
   if (depth >= MAX_JSON_DEPTH || !/[=:]|--/.test(decoded)) return
   const inner: Found[] = []
   assignmentsInto(decoded, inner, depth + 1)
+  const at = decoded === raw ? null : sourceOffsets(raw)
   for (const f of inner) {
-    out.push(decoded === raw ? { start: start + f.start, end: start + f.end, value: f.value } : { start, end: start + raw.length, value: f.value })
+    if (at === null) {
+      out.push({ start: start + f.start, end: start + f.end, value: f.value })
+      continue
+    }
+    const from = at[f.start] ?? raw.length
+    const to = at[f.end] ?? raw.length
+    out.push({ start: start + from, end: start + to, value: raw.slice(from, to) })
+    out.push({ start: start + from, end: start + to, value: f.value })
   }
 }
 
