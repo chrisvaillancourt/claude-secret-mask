@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import { builtinRules, parsePatternsFile, withUserRules } from './detect'
+import { builtinRules, findSecrets, parsePatternsFile, withUserRules } from './detect'
 import type { Rules } from './detect'
 import {
   INITIAL,
@@ -9,7 +9,10 @@ import {
   configFrom,
   expandHome,
   isActive,
+  isMediaPath,
   isSessionToolResult,
+  MAX_MENTION_BYTES,
+  mentionReason,
   parseArgs,
   patternsLine,
   restoreFieldsFor,
@@ -154,6 +157,31 @@ async function sessionToolResult($: EngineInterface, path: string): Promise<stri
   return isSessionToolResult(file.realPath, root.realPath, sessionId) ? file.realPath : undefined
 }
 
+/** Why a mentioned file must be refused, or undefined to let it through. */
+async function mentionVerdict($: EngineInterface, path: string): Promise<'secret' | 'unreadable' | 'too-large' | undefined> {
+  const stat = await $.fs.stat(path).catch(() => undefined)
+  if (stat === undefined || stat.kind !== 'file') return undefined // nothing to attach
+  if (stat.size > MAX_MENTION_BYTES) return 'too-large'
+  let text: string
+  try {
+    text = await $.fs.read(path)
+  } catch {
+    return 'unreadable'
+  }
+  const known = [...ctx.vault.byValue.keys()].some(v => text.includes(v))
+  return known || findSecrets(text, ctx.rules).length > 0 ? 'secret' : undefined
+}
+
+/** Best effort: tell the person on screen and in the log. Never pass a value here. */
+function note($: EngineInterface, text: string) {
+  log($, text)
+  try {
+    $.ui.toast(text)
+  } catch {
+    // nothing to do
+  }
+}
+
 function maskString(text: string): string {
   const out = maskText(text, ctx.vault, ctx.rules, mint)
   tally(out)
@@ -258,6 +286,19 @@ export const register: Register = (on, options) => {
     if (!(await active($))) return next(e)
     return next({ ...e, text: maskString(e.text) })
   }).catch(($, e, next) => (next.called ? next(e) : { isDelivered: false, reason: 'secret-mask could not mask this message' }))
+
+  // An @-mention's raw text is kept on disk by the engine whatever a hook
+  // does to what the model reads, so refuse one that holds a secret, before
+  // it is read. Media is not scanned; a text file that can't be checked is
+  // refused (fail closed).
+  on('prompt.mention', async ($, e, next) => {
+    if (!ctx.config.refuseSecretMentions || isMediaPath(e.path) || !(await active($))) return next(e)
+    const why = await mentionVerdict($, e.path)
+    if (why === undefined) return next(e)
+    const reason = mentionReason(e.mention, why)
+    note($, reason)
+    return { deny: reason }
+  }).catch(($, e, next) => (next.called ? next(e) : { deny: mentionReason(e.mention, 'unreadable') }))
 
   // What the model reads for an injected attachment: a mentioned @file, a
   // reminder, a settings hook's context. The transcript keeps the engine's

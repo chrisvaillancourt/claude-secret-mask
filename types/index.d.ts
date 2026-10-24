@@ -7,6 +7,8 @@ export type Config = {
   restoreIntoFiles: boolean
   /** Restore placeholders into MCP tool arguments. */
   restoreInMcp: boolean
+  /** Refuse an @-mention of a text file that holds a detectable secret, while masking is on. */
+  refuseSecretMentions: boolean
   /** The user's patterns file; a leading `~` is the home directory. */
   patternsFile: string
 }

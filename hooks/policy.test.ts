@@ -25,6 +25,7 @@ describe('policy', () => {
       enabled: true,
       restoreIntoFiles: false,
       restoreInMcp: false,
+      refuseSecretMentions: true,
       patternsFile: '~/.config/secret-mask/patterns.json',
     })
   })

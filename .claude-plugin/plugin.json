@@ -27,6 +27,12 @@
       "title": "Patterns file",
       "description": "JSON file of your own patterns and allow-list, outside any repository. A leading ~ is your home directory.",
       "default": "~/.config/secret-mask/patterns.json"
+    },
+    "refuseSecretMentions": {
+      "type": "boolean",
+      "title": "Refuse secret @-mentions",
+      "description": "While masking is on, refuse an @-mention of a text file that holds a detectable secret (Claude Code keeps an @-mentioned file raw on disk). Read it with a tool instead.",
+      "default": true
     }
   },
   "author": {

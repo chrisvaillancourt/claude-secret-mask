@@ -29,7 +29,9 @@ const world = (on: On, files: Record<string, string> = {}) => {
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
+  const unreadable = new Set<string>()
   on('fs.read', ($, e) => {
+    if (unreadable.has(e.path)) return { deny: `EACCES: permission denied, open '${e.path}'` }
     const text = files[links[e.path] ?? e.path]
     return text === undefined ? { deny: `ENOENT: no such file, open '${e.path}'` } : { value: text }
   })
@@ -57,7 +59,14 @@ const world = (on: On, files: Record<string, string> = {}) => {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('prompt.context', ($, e) => ({ blocks: e.blocks }))
   on('prompt.attachment', ($, e) => ({ text: e.text }))
-  return { session, ran, written, errorNext: () => (errorNext = true), persistNext: (path = PERSISTED) => (persistNext = path), links, files }
+  const mentioned: string[] = []
+  on('prompt.mention', ($, e) => {
+    mentioned.push(e.path)
+    return { type: 'file' as const }
+  })
+  return {
+    unreadable,
+    mentioned, session, ran, written, errorNext: () => (errorNext = true), persistNext: (path = PERSISTED) => (persistNext = path), links, files }
 }
 
 const start = ($: any) => $.session.start({ cwd: '/x', surface: 'terminal', isInteractive: true })
@@ -179,6 +188,52 @@ test('a mentioned file\'s attachment text is masked for the model, main and suba
   expect(sub.text.includes(KEY)).toBe(false)
   const none: any = await $.prompt.attachment({ type: 'todo_reminder', text: 'nothing here', origin: { kind: 'engine' } } as any)
   expect(none.text).toBe('nothing here')
+})
+
+describe('@-mentions', () => {
+  const mention = ($: any, path: string) => $.prompt.mention({ mention: path.split('/').at(-1), path })
+
+  test('a mentioned file holding a secret is refused before it is read, with no value in the reason', async ($, on) => {
+    const w = world(on, { '/x/creds.txt': `aws_access_key_id = ${KEY}\n` })
+    await start($)
+    const r: any = await mention($, '/x/creds.txt')
+    expect(w.mentioned).toEqual([])
+    expect(r.deny).toContain('Read')
+    expect(r.deny.includes(KEY)).toBe(false)
+  })
+
+  test('a file with no secret, a media file, and a missing file go through', async ($, on) => {
+    const w = world(on, { '/x/notes.txt': 'nothing here\n' })
+    await start($)
+    await mention($, '/x/notes.txt')
+    await mention($, '/x/pic.png')
+    await mention($, '/x/missing.txt')
+    expect(w.mentioned).toEqual(['/x/notes.txt', '/x/pic.png', '/x/missing.txt'])
+  })
+
+  test('a text file that exists but cannot be read is refused', async ($, on) => {
+    const w = world(on, { '/x/locked.txt': 'x' })
+    w.unreadable.add('/x/locked.txt')
+    await start($)
+    const r: any = await mention($, '/x/locked.txt')
+    expect(w.mentioned).toEqual([])
+    expect(r.deny).toContain('could not be checked')
+  })
+
+  test('refuseSecretMentions off, or masking off, lets it through', { options: { refuseSecretMentions: false } }, async ($, on) => {
+    const w = world(on, { '/x/creds.txt': KEY })
+    await start($)
+    await mention($, '/x/creds.txt')
+    expect(w.mentioned).toEqual(['/x/creds.txt'])
+  })
+
+  test('masking off lets a secret-bearing mention through', async ($, on) => {
+    const w = world(on, { '/x/creds.txt': KEY })
+    await start($)
+    await run($, 'off')
+    await mention($, '/x/creds.txt')
+    expect(w.mentioned).toEqual(['/x/creds.txt'])
+  })
 })
 
 describe('restoring tool input', () => {

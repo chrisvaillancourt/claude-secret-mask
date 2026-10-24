@@ -16,6 +16,7 @@ export function configFrom(options: Record<string, unknown>): Config {
     enabled: options.enabled !== false,
     restoreIntoFiles: options.restoreIntoFiles === true,
     restoreInMcp: options.restoreInMcp === true,
+    refuseSecretMentions: options.refuseSecretMentions !== false,
     patternsFile: typeof file === 'string' && file.trim() !== '' ? file.trim() : DEFAULT_PATTERNS_FILE,
   }
 }
@@ -68,6 +69,28 @@ export function isSessionToolResult(realPath: string, realProjectsRoot: string, 
     rest.every(p => p !== '' && p !== '.' && p !== '..') &&
     rest[1] === sessionId &&
     rest[2] === 'tool-results'
+  )
+}
+
+/** Files an @-mention attaches as media, which this mod does not scan. */
+export function isMediaPath(path: string): boolean {
+  return /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|ico|pdf)$/i.test(path)
+}
+
+/** The largest file an @-mention check reads; a bigger one is refused. */
+export const MAX_MENTION_BYTES = 5 * 1024 * 1024
+
+/** Why an @-mention was refused. Names the mention as typed, never a value. */
+export function mentionReason(mention: string, why: 'secret' | 'unreadable' | 'too-large'): string {
+  const what =
+    why === 'secret'
+      ? 'holds what looks like a secret'
+      : why === 'unreadable'
+        ? 'could not be checked for secrets'
+        : `is larger than ${MAX_MENTION_BYTES / 1024 / 1024} MB, too large to check for secrets`
+  return (
+    `secret-mask: @${mention} was not attached because it ${what}. ` +
+    "Claude Code keeps an @-mentioned file's raw text on disk. Have it read with the Read tool or cat instead: tool output is masked."
   )
 }
 
