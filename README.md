@@ -4,10 +4,12 @@ A Claude Code mod (function-hook plugin) for reversible secret masking. Secrets 
 
 This is masking on the paths the mod API lets a plugin rewrite, not a vault or an exfiltration firewall. Read [What it does not cover](#what-it-does-not-cover) before you rely on it.
 
+> **Team, Enterprise and managed accounts: partial coverage.** On a Team or Enterprise account, or a machine with managed settings, Claude Code's built-in `cc-plugin-sec-default` plugin runs ahead of this mod and skips three of its hooks. The rows Claude Code injects (CLAUDE.md and other instruction files, reminders, a mentioned file's text), settings-hook output and compaction summaries then reach the model and the transcript unmasked. The mod still masks tool output, your prompts and the model's replies, and still restores placeholders, but it is not a complete safeguard there. See [Team, Enterprise and managed environments](#team-enterprise-and-managed-environments).
+
 ## Behavior
 
 - **Detects** secrets from three sources, in order: known values (secret-named environment variables, values in your patterns file, and anything already found), known token formats, and secret-named assignments in a fixed list of formats. See [What gets masked](#what-gets-masked). You can add your own patterns, exact values and an allow-list in a file outside the repo (see [Patterns file](#patterns-file)).
-- **Masks** in the main conversation and in subagents:
+- **Masks** in the main conversation and in subagents (where `cc-plugin-sec-default` is seated, the `session.append` attachment, hook-context and compaction rows, `prompt.attachment` and `prompt.context` are skipped: see [Team, Enterprise and managed environments](#team-enterprise-and-managed-environments)):
   - every row the conversation keeps (`session.append`, all doors: your prompt, tool results, deliveries from other agents and sessions, hook context, compaction summaries, the model's own text). Attachment rows are the exception: see the next point and [What it does not cover](#what-it-does-not-cover). This is what the model reads and what the transcript file stores.
   - `@`-mentions (`prompt.mention`): a text file holding a detectable secret is refused before it is read, unless `refuseSecretMentions` is off.
   - what the model reads for each injected attachment (`prompt.attachment`): a file you mention with `@`, reminders, a settings hook's context. Checked live: the model quoted an `@file` line as a placeholder.
@@ -73,7 +75,7 @@ There is no generic keyword or entropy rule beyond the formats above: the model 
 
 These routes reach the model, the screen or the disk without passing through anything a mod can rewrite. A secret there is not masked.
 
-- **`@file` attachments on disk.** The model reads the masked text, but Claude Code keeps its own record of the attachment as made, and the API gives a mod no way to rewrite it. Checked live on 2.1.310: the transcript held the raw value in the attachment row's payload (`attachment.content.file.content`) and in the transcript's record of the request (an `api-request-blob` row holding the attachment's rendering). Requests built from that record (compaction, `$.model.fork`) and other plugins reading `$.session.messages` may get the raw text (not checked). So by default (`refuseSecretMentions`) the mod refuses an `@`-mention of a text file that holds a secret it can detect, before the file is read, and says to read it with a tool (`cat`, Read) instead, whose output is masked. That check does not cover formats the patterns miss (the file is then attached raw), media files (images and PDFs are not scanned), a file that changes between the check and the read, or a managed plugin that skips the hook. A text file the mod can't read, can't inspect for any reason other than its being missing, or over 5 MB, is refused.
+- **`@file` attachments on disk.** The model reads the masked text, but Claude Code keeps its own record of the attachment as made, and the API gives a mod no way to rewrite it. Checked live on 2.1.310: the transcript held the raw value in the attachment row's payload (`attachment.content.file.content`) and in the transcript's record of the request (an `api-request-blob` row holding the attachment's rendering). Requests built from that record (compaction, `$.model.fork`) and other plugins reading `$.session.messages` may get the raw text (not checked). So by default (`refuseSecretMentions`) the mod refuses an `@`-mention of a text file that holds a secret it can detect, before the file is read, and says to read it with a tool (`cat`, Read) instead, whose output is masked. That check does not cover formats the patterns miss (the file is then attached raw), media files (images and PDFs are not scanned), or a file that changes between the check and the read. Where `cc-plugin-sec-default` is seated, the refusal still runs, but a mentioned file that passes it reaches the model as written (`prompt.attachment` is skipped), so with `refuseSecretMentions` off every mentioned file reaches the model raw. A text file the mod can't read, can't inspect for any reason other than its being missing, or over 5 MB, is refused.
 - **The screen before the rewrite.** Claude Code may draw a row just before `session.append` rewrites it, and streams the model's reply as it is written. The structured tool result is masked before it is drawn (checked live, see below).
 - **What runs with the real value.** Restoring happens before Claude Code's permission check, so the permission prompt, the auto-mode classifier (a model) and PreToolUse hooks see the restored command, and so does the process: a command that writes the secret to a file writes the real value. A command that transforms the secret (`base64`, `rev`, splitting it) prints a form no pattern recognises. Masking keeps a secret from being read in plain sight; it does not stop a model that sets out to reveal it.
 - **Thinking and tool-use blocks** are pinned by the engine and can't be rewritten. The model can only write what it has read, so this matters only for a secret that came in by an uncovered route.
@@ -81,12 +83,12 @@ These routes reach the model, the screen or the disk without passing through any
 - **The system prompt and tool descriptions** are not scanned.
 - **History loaded by `--resume`, teleport or a saved subagent transcript** is not re-scanned.
 - **Large outputs of tools other than Bash.** Claude Code saves an output too large to keep inline to a file before any hook runs. The mod masks the file a Bash (or MCP raw output) result names; another tool's saved file is left as written.
-- **Managed plugins seated above it.** An organization's plugin in the `prepend` tier runs before every user plugin and can pass an event on past them. On the machine this was checked on, a managed plugin did that for `prompt.context` (every session), for one row appended at startup, and in one review run for `prompt.attachment`, so the model then read an `@file` raw. The debug log names each case: `secret-mask: ... bypassed by <plugin>`, and Claude Code shows `its <event> hook was skipped`.
+- **Team, Enterprise and managed environments.** Claude Code's built-in `cc-plugin-sec-default` skips this mod's `session.append` hook on the attachment, hook-context and compaction rows, and its `prompt.attachment` and `prompt.context` hooks, in every session where it is seated. See [Team, Enterprise and managed environments](#team-enterprise-and-managed-environments).
 - **Slash-command arguments** reach the command unmasked (its rows in the conversation are masked). The prompt-history line (up-arrow) is not verified.
 - **Discovery is not retroactive across rows.** A value is learned when a pattern first finds it (environment and patterns-file values are known from the start). A bare copy stored in an earlier row (before it was found) stays raw in that row; copies after it are masked. Within one row or one tool result, every copy is masked.
 - **A literal reserved token blocks a command.** Anything shaped like a placeholder (`__SECRET_<KIND>_<8 hex>__`) that this load didn't issue is denied in a restored field, so an ordinary command that mentions one, such as searching a file for a placeholder string, is denied without running.
 - **Secrets split by line wraps or across blocks**, values shorter than the thresholds, unusual encodings, and anything [out of contract](#3-secret-named-assignments-in-these-formats-only).
-- **Other plugins** can see and reintroduce secrets, and nothing protects you when the mod is off, fails to load, or is skipped.
+- **Other plugins** can see and reintroduce secrets, and nothing protects you when the mod is off, fails to load, or is skipped. A plugin an organization seats in a managed tier (`prepend`) runs before every user plugin and can skip any of its hooks the same way.
 
 ### Cut from v0.1
 
@@ -94,6 +96,43 @@ These routes reach the model, the screen or the disk without passing through any
 - Masking slash-command arguments at `command.run` and skill bodies at `skill.prompt` (their rows are masked at `session.append`).
 - A reveal command, friendly labels in placeholders, and placeholders that stay the same across restarts.
 - Not verified: whether masking a Read result changes how a later Edit of the same file checks what was read; the prompt-history (up-arrow) line.
+
+## Team, Enterprise and managed environments
+
+Claude Code 2.1.316 and later ships a built-in plugin, `cc-plugin-sec-default@builtin`. It is not installed from a marketplace and `claude plugin list` doesn't show it. Its own description: it "keeps the organization's classic hooks, prompt content, settings and tool policy out of reach of the plugins a person installs, and adds no policy of its own". It is seated outermost, ahead of every mod you install, when any of these holds:
+
+- the account belongs to a Team or Enterprise organization;
+- the machine has managed settings or a managed MCP file;
+- the organization's managed `prependPlugins` lists it.
+
+When it is seated, it sends some events on past every user-installed mod, so their hooks for those events never run. For this mod that means, in every session where it is seated:
+
+| Skipped hook | What then reaches the model and the transcript unmasked |
+| --- | --- |
+| `session.append` on the `attachment`, `hook-context` and `compaction` doors (also, sometimes, `Skill` tool rows) | The rows Claude Code injects beside the conversation: CLAUDE.md and other instruction files, reminders and listings, a mentioned file's rendering; the output of settings hooks (`SessionStart`, `UserPromptSubmit`, `PostToolUse` and the like); a compaction's boundary and summary. |
+| `prompt.attachment` | What the model reads for those same injected attachments, `@file` text included. |
+| `prompt.context` | The first message's context blocks. |
+
+A secret that arrives only by one of these routes is never seen, so it is neither masked there nor learned as a known value. Environment and patterns-file values in these rows stay raw too.
+
+**What still works.** Every hook on an event the built-in doesn't skip: `session.append` on the other doors (your prompt, slash commands, tool results, the model's replies, deliveries, notices, queue records), `prompt.submit`, `tool.call` (structured results, error records, saved output files, restoring and the unknown-placeholder denial), `session.send`, the `@file` refusal at `prompt.mention`, and `/secret-mask`. Tool output, the mod's main source, is still masked, and placeholders are still restored. With `refuseSecretMentions` on, a mentioned text file holding a secret the mod can detect is still refused before it is read; one that passes reaches the model as written, and with the option off every mentioned file does.
+
+**No workaround.** Checked against the 2.1.317 API: no event the built-in leaves alone can rewrite those rows or the request that carries them. `turn.step` pins the request's messages (only `model` and `effort` can change); settings hooks' output passes through `classic.*` events, which are skipped too, and is not on `tool.call`'s or `prompt.submit`'s result; compaction's own event, `session.compact`, is skipped; and `$.session` has no call that rewrites a stored row. The mod also can't tell from inside that it is seated: `$.session.identity()` answers only mods that managed settings install, and in a live check no notice about the skip reached the mod's hooks. Read the debug log instead.
+
+**How to tell.** Start Claude Code with `claude --debug` (or `--debug-file <file>`) and look for:
+
+```text
+cc-plugin-sec-default@builtin seated outermost: the organization is team
+secret-mask: session.append bypassed by cc-plugin-sec-default (tier user); beneath runs
+secret-mask: prompt.context bypassed by cc-plugin-sec-default (tier user); beneath runs
+secret-mask: prompt.attachment bypassed by cc-plugin-sec-default (tier user); beneath runs
+```
+
+When several mods are skipped at once, their names are joined with `+` (`secret-mask+other-mod: ...`). Claude Code also reports `secret-mask: its <event> hook was skipped. "cc-plugin-sec-default" runs first and sent the event on past it.` (on stderr in a `claude -p` run).
+
+**Unseating it** takes managed settings: an organization admin sets managed `prependPlugins` (server-managed settings, MDM or `managed-settings.json`) without listing `cc-plugin-sec-default`. It applies to everyone the managed settings reach, and it also takes away the protection the built-in gives the organization's own hooks and policy, so it is the organization's decision. Nothing in your own settings turns it off.
+
+**Checked live** on Claude Code 2.1.317 with a Team login (`claude -p --plugin-dir . --model haiku`): with a fake key in the folder's CLAUDE.md and another printed by a `SessionStart` settings hook, both keys were stored raw in the transcript (in the attachment rows' rendering, which the model reads, and in the request records), and the debug log held the three `bypassed` lines above. After `/compact`, neither the boundary nor the summary row reached the mod's `session.append` hook. Not checked on 2.1.317: an unseated session (this machine's login always seats it).
 
 ## Command
 
@@ -160,6 +199,8 @@ claude plugin install secret-mask@secret-mask --scope user
 ```
 
 Or from inside Claude Code: `/plugin install secret-mask --marketplace chrisvaillancourt/claude-secret-mask`.
+
+On a Team or Enterprise account, or a machine with managed settings, the mod masks only part of what it masks elsewhere: injected context, settings-hook output and compaction summaries stay raw. Read [Team, Enterprise and managed environments](#team-enterprise-and-managed-environments) before you install it there.
 
 To work on it locally, add your clone as the marketplace instead (`claude plugin marketplace add <path to clone>`). The plugin is read from that folder; after editing, run `/reload-plugins`.
 
